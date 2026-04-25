@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>VirtualClubDancers - Admin Panel</title>
+  <style>
+    :root {
+      --bg: #0e0e12; --surface: #1a1a24; --surface2: #24243a; --border: #333355;
+      --accent: #9146ff; --accent2: #bf94ff; --green: #00c853; --red: #ff1744;
+      --orange: #ff9100; --yellow: #ffd600; --text: #e8e8f0; --text2: #8888aa;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', -apple-system, Arial, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+    .header { background: linear-gradient(135deg, var(--surface), var(--surface2)); padding: 10px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .header-left { display: flex; align-items: center; gap: 16px; }
+    .header h1 { font-size: 17px; font-weight: 700; background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .header .status { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); transition: background 0.3s; }
+    .status-dot.connected { background: var(--green); animation: pulse-dot 2s infinite; }
+    @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+    .header-right { display: flex; gap: 8px; align-items: center; }
+    .tab-bar { display: flex; background: var(--surface); border-bottom: 2px solid var(--border); flex-shrink: 0; overflow-x: auto; }
+    .tab-btn { padding: 10px 16px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text2); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; margin-bottom: -2px; }
+    .tab-btn:hover { color: var(--text); background: var(--surface2); }
+    .tab-btn.active { color: var(--accent2); border-bottom-color: var(--accent); background: rgba(145,70,255,0.08); }
+    .content { flex: 1; overflow-y: auto; padding: 20px; }
+    .tab-panel { display: none; } .tab-panel.active { display: block; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    .card-title { font-size: 14px; font-weight: 700; margin-bottom: 16px; color: var(--accent2); text-transform: uppercase; letter-spacing: 0.5px; }
+    .setup-card { background: var(--surface); border: 1px solid var(--accent); border-radius: 12px; padding: 32px; max-width: 480px; margin: 40px auto; box-shadow: 0 0 30px rgba(145,70,255,0.15); }
+    .setup-card h2 { font-size: 22px; margin-bottom: 4px; }
+    .setup-card .subtitle { color: var(--text2); margin-bottom: 24px; font-size: 14px; }
+    label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 4px; margin-top: 10px; }
+    label:first-child { margin-top: 0; }
+    input, select, textarea { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; outline: none; transition: border-color 0.2s; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    input[type="range"] { padding: 0; height: 6px; -webkit-appearance: none; background: var(--border); border-radius: 3px; border: none; margin-top: 6px; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+    .range-val { font-size: 13px; font-weight: 600; color: var(--accent2); min-width: 40px; text-align: right; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: var(--accent); color: white; } .btn-primary:hover { background: #7c38e0; }
+    .btn-danger { background: var(--red); color: white; } .btn-danger:hover { background: #d50032; }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); } .btn-secondary:hover { border-color: var(--accent); }
+    .btn-success { background: var(--green); color: white; } .btn-success:hover { background: #00a846; }
+    .btn-warning { background: var(--orange); color: white; } .btn-warning:hover { background: #e68200; }
+    .btn-block { width: 100%; margin-top: 12px; } .btn-sm { padding: 5px 10px; font-size: 11px; }
+    .token-link { display: inline-flex; align-items: center; gap: 6px; color: var(--accent2); font-size: 13px; margin-top: 6px; }
+    .token-link:hover { color: var(--accent); }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    .stat-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
+    .stat-value { font-size: 26px; font-weight: 700; color: var(--accent2); }
+    .stat-label { font-size: 11px; color: var(--text2); margin-top: 2px; }
+    .avatar-list { list-style: none; max-height: 400px; overflow-y: auto; }
+    .avatar-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; transition: background 0.15s; }
+    .avatar-item:hover { background: var(--surface2); }
+    .avatar-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+    .avatar-dot.inactive { background: var(--orange); }
+    .avatar-name { flex: 1; font-weight: 500; }
+    .avatar-emote { color: var(--text2); font-size: 11px; min-width: 60px; }
+    .avatar-time { color: var(--text2); font-size: 10px; min-width: 40px; text-align: right; }
+    .avatar-remove { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
+    .avatar-remove:hover { background: rgba(255,23,68,0.15); }
+    .avatar-trigger { background: none; border: none; color: var(--accent2); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+    .avatar-trigger:hover { background: rgba(145,70,255,0.15); }
+    .emote-category { margin-bottom: 16px; }
+    .emote-category-title { font-size: 12px; color: var(--text2); margin-bottom: 8px; font-weight: 600; }
+    .emote-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+    .emote-chip { padding: 4px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 14px; font-size: 11px; cursor: pointer; transition: all 0.15s; color: var(--text); }
+    .emote-chip:hover { border-color: var(--accent); background: var(--surface2); }
+    .emote-chip.social { border-color: var(--orange); }
+    .emote-chip.social:hover { background: rgba(255,145,0,0.1); }
+    .emote-chip.active { background: var(--accent); border-color: var(--accent); color: white; }
+    .party-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .bpm-section { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+    .bpm-value { font-size: 42px; font-weight: 800; background: linear-gradient(90deg, var(--accent), var(--orange)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; min-width: 80px; }
+    .bpm-label { font-size: 11px; color: var(--text2); text-transform: uppercase; }
+    .bpm-controls { display: flex; gap: 8px; }
+    .bpm-btn { width: 36px; height: 36px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+    .bpm-btn:hover { border-color: var(--accent); background: var(--accent); color: white; }
+    .chat-log { padding: 12px; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.6; max-height: 300px; overflow-y: auto; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
+    .chat-line { padding: 2px 0; word-break: break-all; }
+    .chat-line .ch-user { color: var(--accent2); font-weight: 600; }
+    .chat-line .ch-cmd { color: var(--green); }
+    .chat-line .ch-err { color: var(--red); }
+    .chat-line .ch-sys { color: var(--orange); }
+    .preset-list { display: flex; flex-direction: column; gap: 8px; }
+    .preset-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; transition: border-color 0.2s; }
+    .preset-item:hover { border-color: var(--accent); }
+    .preset-name { flex: 1; font-weight: 600; font-size: 13px; }
+    .preset-date { color: var(--text2); font-size: 11px; }
+    .twitch-status-bar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+    .twitch-status-bar.connected { background: rgba(0,200,83,0.1); border: 1px solid rgba(0,200,83,0.3); }
+    .twitch-status-bar.disconnected { background: rgba(255,23,68,0.1); border: 1px solid rgba(255,23,68,0.3); }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; } ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    .hidden { display: none !important; }
+    .flex-row { display: flex; gap: 12px; align-items: flex-start; } .flex-1 { flex: 1; }
+    .force-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .force-row { display: flex; gap: 8px; margin-top: 8px; } .force-row input { flex: 1; } .force-row select { flex: 1; }
+    /* Audio beat indicator */
+    .beat-indicator { width: 60px; height: 60px; border-radius: 50%; background: var(--surface2); border: 3px solid var(--border); display: flex; align-items: center; justify-content: center; margin: 16px auto; transition: all 0.08s; }
+    .beat-indicator.active { background: var(--accent); border-color: var(--accent2); box-shadow: 0 0 20px rgba(145,70,255,0.6); }
+    .audio-status { text-align: center; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+    .audio-status.disconnected { background: rgba(255,23,68,0.1); border: 1px solid rgba(255,23,68,0.3); color: var(--red); }
+    .audio-status.connected { background: rgba(0,200,83,0.1); border: 1px solid rgba(0,200,83,0.3); color: var(--green); }
+    .info-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 12px; font-size: 12px; color: var(--text2); line-height: 1.6; }
+    .info-box strong { color: var(--accent2); }
+    .audio-level-bar { width: 100%; height: 12px; background: var(--bg); border-radius: 6px; overflow: hidden; margin-top: 8px; border: 1px solid var(--border); }
+    .audio-level-fill { height: 100%; background: linear-gradient(90deg, var(--green), var(--yellow), var(--red)); width: 0%; transition: width 0.05s; border-radius: 6px; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1>VirtualClubDancers</h1>
+      <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Nicht verbunden</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <span style="font-size:11px;color:var(--text2)">v2.2.0</span>
+      <span style="font-size:11px;color:var(--green);margin-left:8px">OBS: http://localhost:3333</span>
+    </div>
+  </div>
+
+  <!-- Tab Navigation -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('overview', this)">Ubersicht</button>
+    <button class="tab-btn" onclick="switchTab('avatars', this)">Avatare</button>
+    <button class="tab-btn" onclick="switchTab('controls', this)">Controls</button>
+    <button class="tab-btn" onclick="switchTab('scene', this)">Szene</button>
+    <button class="tab-btn" onclick="switchTab('audio', this)">Audio-Quelle</button>
+    <button class="tab-btn" onclick="switchTab('twitch', this)">Twitch</button>
+    <button class="tab-btn" onclick="switchTab('presets', this)">Presets</button>
+  </div>
+
+  <!-- Main Content -->
+  <div class="content">
+
+    <!-- ═══ TAB: Overview ═══ -->
+    <div class="tab-panel active" id="tab-overview">
+      <div class="setup-card" id="setupCard">
+        <h2>Willkommen bei VirtualClubDancers!</h2>
+        <p class="subtitle">Verbinde dich mit deinem Twitch-Kanal, um den Club zu starten.</p>
+        <label for="setupChannel">Twitch-Kanalname</label>
+        <input type="text" id="setupChannel" placeholder="Dein Twitch-Kanalname">
+        <label for="setupOAuth">OAuth Token</label>
+        <input type="password" id="setupOAuth" placeholder="oauth:xxxxxxxxxxxx">
+        <p style="margin-top:4px"><a href="https://twitchtokengenerator.com/" target="_blank" class="token-link">Token hier generieren &rarr;</a></p>
+        <button class="btn btn-primary btn-block" onclick="setupConnect()">Verbinden &amp; Starten</button>
+      </div>
+      <div class="hidden" id="mainDashboard">
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-value" id="statAvatars">0</div><div class="stat-label">Aktive Avatare</div></div>
+          <div class="stat-card"><div class="stat-value" id="statBPM">120</div><div class="stat-label">BPM</div></div>
+          <div class="stat-card"><div class="stat-value" id="statCommands">0</div><div class="stat-label">Befehle / Min</div></div>
+          <div class="stat-card"><div class="stat-value" id="statUptime">0:00</div><div class="stat-label">Uptime</div></div>
+        </div>
+        <div class="flex-row">
+          <div class="card flex-1">
+            <div class="card-title">Quick Party-Modi</div>
+            <div class="party-grid">
+              <button class="btn btn-primary" onclick="setPartyMode('party')">Alle tanzen!</button>
+              <button class="btn btn-secondary" onclick="setPartyMode('freeze')">Einfrieren</button>
+              <button class="btn btn-success" onclick="setPartyMode('confetti')">Konfetti!</button>
+              <button class="btn btn-danger" onclick="setPartyMode(null)">Normal</button>
+            </div>
+            <div class="force-section">
+              <label>Alle tanzen lassen:</label>
+              <div class="force-row">
+                <select id="forceEmoteSelect"><option value="">-- Tanz wahlen --</option></select>
+                <button class="btn btn-warning btn-sm" onclick="forceAllEmote()">Los!</button>
+              </div>
+            </div>
+          </div>
+          <div class="card flex-1">
+            <div class="card-title">Beat / BPM</div>
+            <div class="bpm-section">
+              <div><div class="bpm-label">Beats pro Minute</div><div class="bpm-value" id="bpmDisplay">120</div></div>
+              <div class="bpm-controls">
+                <button class="bpm-btn" onclick="changeBPM(-10)">-</button>
+                <button class="bpm-btn" onclick="changeBPM(10)">+</button>
+                <button class="bpm-btn" onclick="setBPM(120)" title="Reset 120">R</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card"><div class="card-title">Chat-Log (Befehle)</div><div class="chat-log" id="chatLog"></div></div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Avatar Management ═══ -->
+    <div class="tab-panel" id="tab-avatars">
+      <div class="card">
+        <div class="card-title">Aktive Avatare (<span id="avatarCount">0</span>/50)</div>
+        <div style="margin-bottom:12px">
+          <input type="text" id="addAvatarInput" placeholder="Username manuell hinzufugen...">
+          <button class="btn btn-primary btn-sm" style="margin-top:6px" onclick="addAvatarManual()">Hinzufugen</button>
+        </div>
+        <ul class="avatar-list" id="avatarList"></ul>
+        <div style="margin-top:12px"><button class="btn btn-danger btn-sm" onclick="removeAllAvatars()">Alle entfernen</button></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Emote fur Avatar auslosen</div>
+        <div class="force-row" style="margin-bottom:12px">
+          <input type="text" id="emoteTargetUser" placeholder="Username">
+          <select id="emoteForUser"><option value="">-- Emote wahlen --</option></select>
+          <button class="btn btn-primary btn-sm" onclick="triggerEmoteForUser()">Auslosen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Global Controls ═══ -->
+    <div class="tab-panel" id="tab-controls">
+      <div class="card">
+        <div class="card-title">Party-Modi</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:12px">Steuere alle Avatare gleichzeitig.</p>
+        <div class="party-grid" style="margin-bottom:16px">
+          <button class="btn btn-primary" onclick="setPartyMode('party')">Alle tanzen!</button>
+          <button class="btn btn-secondary" onclick="setPartyMode('freeze')">Einfrieren</button>
+          <button class="btn btn-success" onclick="setPartyMode('confetti')">Konfetti-Regen!</button>
+          <button class="btn btn-danger" onclick="setPartyMode(null)">Normal (Idle)</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Beat-Synchronisation</div>
+        <div class="bpm-section">
+          <div><div class="bpm-label">BPM</div><div class="bpm-value" id="bpmDisplayCtrl">120</div></div>
+          <div class="bpm-controls">
+            <button class="bpm-btn" onclick="changeBPM(-5)">-5</button>
+            <button class="bpm-btn" onclick="changeBPM(-1)">-1</button>
+            <button class="bpm-btn" onclick="changeBPM(1)">+1</button>
+            <button class="bpm-btn" onclick="changeBPM(5)">+5</button>
+            <button class="bpm-btn" onclick="setBPM(120)" title="Reset">R</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Tanz-Emotes (48)</div>
+        <div class="emote-category"><div class="emote-category-title">Klassische Tanze</div><div class="emote-grid" id="emoteGrid-classic"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Hip-Hop / Street</div><div class="emote-grid" id="emoteGrid-hiphop"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Party Moves</div><div class="emote-grid" id="emoteGrid-party"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Retro / 80er</div><div class="emote-grid" id="emoteGrid-retro"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Cartoon / Fun</div><div class="emote-grid" id="emoteGrid-cartoon"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Epic / Show-Off</div><div class="emote-grid" id="emoteGrid-epic"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Beat-Sync</div><div class="emote-grid" id="emoteGrid-beatsync"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Soziale Emotes (20)</div>
+        <div class="emote-category"><div class="emote-category-title">Gruss</div><div class="emote-grid" id="emoteGrid-greeting"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Emotionen</div><div class="emote-grid" id="emoteGrid-emotion"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Konsum</div><div class="emote-grid" id="emoteGrid-consumption"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Interaktion</div><div class="emote-grid" id="emoteGrid-interaction"></div></div>
+        <div class="emote-category"><div class="emote-category-title">Posen &amp; Spezial</div><div class="emote-grid" id="emoteGrid-pose"></div></div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Scene Settings ═══ -->
+    <div class="tab-panel" id="tab-scene">
+      <div class="card">
+        <div class="card-title">Bewegungszone</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:16px">Avatare bewegen sich nur im unteren Vordergrundbereich.</p>
+        <label>Bewegungszone Y-Min: <span class="range-val" id="zoneMinVal">55</span>%</label>
+        <input type="range" id="zoneYMin" min="30" max="70" value="55" oninput="document.getElementById('zoneMinVal').textContent=this.value">
+        <label>Bewegungszone Y-Max: <span class="range-val" id="zoneMaxVal">90</span>%</label>
+        <input type="range" id="zoneYMax" min="60" max="98" value="90" oninput="document.getElementById('zoneMaxVal').textContent=this.value">
+      </div>
+      <div class="card">
+        <div class="card-title">Avatar-Einstellungen</div>
+        <label>Maximale Avatare: <span class="range-val" id="maxAvatarsVal">50</span></label>
+        <input type="range" id="maxAvatars" min="5" max="80" value="50" oninput="document.getElementById('maxAvatarsVal').textContent=this.value">
+        <label>Inaktivitats-Timeout: <span class="range-val" id="timeoutVal">120</span>s</label>
+        <input type="range" id="inactivityTimeout" min="30" max="300" value="120" oninput="document.getElementById('timeoutVal').textContent=this.value">
+        <label>Avatar-Skalierung: <span class="range-val" id="scaleVal">4.0</span>x</label>
+        <input type="range" id="avatarScale" min="50" max="800" value="400" oninput="document.getElementById('scaleVal').textContent=(this.value/100).toFixed(1)">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="saveSceneSettings()">Szene-Einstellungen speichern</button>
+    </div>
+
+    <!-- ═══ TAB: Audio-Quelle ═══ -->
+    <div class="tab-panel" id="tab-audio">
+      <div class="card">
+        <div class="card-title">Audio-Quelle / Beat-Erkennung</div>
+        <div id="audioStatusBar" class="audio-status disconnected">Audio-Quelle nicht verbunden</div>
+        <div class="beat-indicator" id="beatIndicator"><span style="font-size:11px;color:var(--text2)">BEAT</span></div>
+        <div style="text-align:center;margin-bottom:16px">
+          <span style="font-size:32px;font-weight:800;color:var(--accent2)" id="audioBpmDisplay">--</span>
+          <span style="font-size:12px;color:var(--text2);display:block">Erkannte BPM</span>
+        </div>
+        <label>Audio-Eingabegerat</label>
+        <select id="audioDeviceSelect">
+          <option value="">-- Gerat wahlen --</option>
+        </select>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-success" id="btnAudioConnect" onclick="connectAudio()">Audio verbinden</button>
+          <button class="btn btn-danger hidden" id="btnAudioDisconnect" onclick="disconnectAudio()">Trennen</button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshAudioDevices()">Gerate suchen</button>
+        </div>
+        <label style="margin-top:16px">Empfindlichkeit: <span class="range-val" id="sensitivityVal">1.4</span>x</label>
+        <input type="range" id="beatSensitivity" min="10" max="30" value="14" oninput="document.getElementById('sensitivityVal').textContent=(this.value/10).toFixed(1); audioSensitivity=this.value/10;">
+        <label>Audio-Pegel</label>
+        <div class="audio-level-bar"><div class="audio-level-fill" id="audioLevelFill"></div></div>
+        <div class="info-box">
+          <strong>VB-Cable / Virtuelles Audiokabel einrichten:</strong><br>
+          1. Lade <strong>VB-Cable</strong> von <a href="https://vb-audio.com/Cable/" target="_blank" style="color:var(--accent2)">vb-audio.com/Cable</a> herunter und installiere es<br>
+          2. Setze in Windows den VB-Cable als Standard-Ausgabegerat (oder nutze OBS Monitor)<br>
+          3. Wahle hier <strong>"CABLE Input"</strong> als Audio-Quelle<br>
+          4. Alternativ: Nutze <strong>Voicemeeter</strong> fur erweitertes Audio-Routing<br>
+          5. Oder wahle dein <strong>Mikrofon</strong> fur Live-Beat-Erkennung
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Manuelle BPM-Einstellung</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:12px">Wenn keine Audio-Quelle verfugbar ist, kannst du die BPM manuell einstellen.</p>
+        <div class="bpm-section">
+          <div><div class="bpm-label">BPM</div><div class="bpm-value" id="bpmDisplayAudio">120</div></div>
+          <div class="bpm-controls">
+            <button class="bpm-btn" onclick="changeBPM(-10)">-10</button>
+            <button class="bpm-btn" onclick="changeBPM(-5)">-5</button>
+            <button class="bpm-btn" onclick="changeBPM(5)">+5</button>
+            <button class="bpm-btn" onclick="changeBPM(10)">+10</button>
+            <button class="bpm-btn" onclick="setBPM(120)" title="Reset">R</button>
+          </div>
+        </div>
+        <button class="btn btn-warning btn-sm" onclick="tapTempo()" style="margin-top:8px">Tap-Tempo</button>
+        <span style="font-size:11px;color:var(--text2);margin-left:8px">Klicke im Rhythmus zum BPM messen</span>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Twitch Verbindung ═══ -->
+    <div class="tab-panel" id="tab-twitch">
+      <div id="twitchStatusBar" class="twitch-status-bar disconnected">
+        <div class="status-dot" id="twitchDot"></div>
+        <span id="twitchStatusText">Nicht verbunden</span>
+      </div>
+      <div class="card">
+        <div class="card-title">Twitch-Bot Konfiguration</div>
+        <label for="channelName">Kanalname</label>
+        <input type="text" id="channelName" placeholder="Dein Twitch-Kanalname">
+        <label for="oauthToken">OAuth Token</label>
+        <input type="password" id="oauthToken" placeholder="oauth:xxxxxxxxxxxx">
+        <a href="https://twitchtokengenerator.com/" target="_blank" class="token-link">Token hier generieren &rarr;</a>
+        <label for="botUsername">Bot-Username (optional)</label>
+        <input type="text" id="botUsername" placeholder="= Kanalname">
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" id="btnConnect" onclick="connectTwitch()">Verbinden</button>
+          <button class="btn btn-danger hidden" id="btnDisconnect" onclick="disconnectTwitch()">Trennen</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Chat-Befehle Referenz</div>
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:6px;color:var(--text2)">Befehl</th><th style="text-align:left;padding:6px;color:var(--text2)">Beschreibung</th><th style="text-align:right;padding:6px;color:var(--text2)">Cooldown</th></tr></thead>
+          <tbody>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!join</td><td style="padding:6px">Club beitreten</td><td style="padding:6px;text-align:right">1x</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!leave</td><td style="padding:6px">Club verlassen</td><td style="padding:6px;text-align:right">10s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!dance [name]</td><td style="padding:6px">Tanz ausfuhren</td><td style="padding:6px;text-align:right">5s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!dance random</td><td style="padding:6px">Zufalliger Tanz</td><td style="padding:6px;text-align:right">5s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!emote [name]</td><td style="padding:6px">Emote ausfuhren</td><td style="padding:6px;text-align:right">5s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!hug @user</td><td style="padding:6px">Umarmen</td><td style="padding:6px;text-align:right">15s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!highfive @user</td><td style="padding:6px">High-Five</td><td style="padding:6px;text-align:right">10s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!color [part] [farbe]</td><td style="padding:6px">Farbe andern</td><td style="padding:6px;text-align:right">30s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!list dances</td><td style="padding:6px">Tanze auflisten</td><td style="padding:6px;text-align:right">30s</td></tr>
+            <tr><td style="padding:6px;font-family:monospace;color:var(--green)">!stop</td><td style="padding:6px">Animation stoppen</td><td style="padding:6px;text-align:right">3s</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: Presets ═══ -->
+    <div class="tab-panel" id="tab-presets">
+      <div class="card">
+        <div class="card-title">Preset speichern</div>
+        <p style="color:var(--text2);font-size:12px;margin-bottom:12px">Speichere die aktuelle Szene-Konfiguration als Preset.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="presetName" placeholder="Preset-Name...">
+          <button class="btn btn-primary" onclick="savePreset()">Speichern</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Gespeicherte Presets</div>
+        <div class="preset-list" id="presetList"><p style="color:var(--text2);font-size:12px">Noch keine Presets gespeichert.</p></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Socket.IO client from CDN -->
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────────────
+    let socket = null;
+    let connected = false;
+    let commandCount = 0;
+    let startTime = null;
+    let currentAvatarList = [];
+    let currentBPM = 120;
+
+    // ── Audio Beat Detection State ────────────────────────────────────────
+    let audioContext = null;
+    let audioStream = null;
+    let audioAnalyser = null;
+    let audioSource = null;
+    let audioSensitivity = 1.4;
+    let audioConnected = false;
+    let beatDetectorInterval = null;
+    let lastBeatTime = 0;
+    let beatTimes = [];
+    let audioBPM = 0;
+    let tapTimes = [];
+    let bassEnergyHistory = [];
+    const BASS_HISTORY_SIZE = 30;
+
+    // ── Dance & Social Emote Lists ────────────────────────────────────────
+    const DANCE_EMOTES = {
+      classic: ['disco', 'funky', 'robot', 'twist', 'mashpotato', 'swim', 'busstop', 'hustle'],
+      hiphop: ['dab', 'floss', 'worm', 'dougie', 'naenae', 'shiggy', 'inmyfeelings', 'kick'],
+      party: ['jump', 'spin', 'wave', 'bounce', 'shuffle', 'runningman', 'vibe', 'groove'],
+      retro: ['breakdance', 'moonwalk', 'thriller', 'vogue', 'electricslide', 'macarena'],
+      cartoon: ['chickendance', 'penguin', 'robotarms', 'cabbagepatch', 'sprinkler', 'lawnmower'],
+      epic: ['airguitar', 'headbang', 'rave', 'drop', 'slowdance', 'sway', 'poplock'],
+      beatsync: ['beatbounce', 'rhythmstep', 'pulse', 'tempowalk', 'bassdrop']
+    };
+    const SOCIAL_EMOTES = {
+      greeting: ['winken', 'peace', 'thumbsup'],
+      emotion: ['lachen', 'cry', 'angry', 'surprise', 'heart'],
+      consumption: ['drink', 'eat', 'cheer'],
+      interaction: ['hug', 'highfive', 'kiss', 'box'],
+      pose: ['sit', 'kneel', 'lay', 'confetti', 'dj']
+    };
+
+    // ── Tab Switching ──────────────────────────────────────────────────────
+    function switchTab(tabId, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById('tab-' + tabId).classList.add('active');
+      if (btn) btn.classList.add('active');
+    }
+
+    // ── Socket.IO Connection ───────────────────────────────────────────────
+    function connectSocket() {
+      try {
+        if (typeof io === 'undefined') { console.error('[Admin] Socket.IO not loaded'); setTimeout(connectSocket, 5000); return; }
+        socket = io.connect('/', { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 3000 });
+        socket.on('connect', () => { console.log('[Admin] Socket.IO connected'); socket.emit('identify', { clientType: 'admin' }); });
+        socket.on('init', (msg) => {
+          if (msg.twitchStatus === 'connected') updateConnectionStatus('connected');
+          if (msg.avatars) updateAvatarList(msg.avatars);
+          if (msg.bpm) { currentBPM = msg.bpm; updateBPMDisplay(); }
+          if (msg.config) loadConfigFromServer(msg.config);
+          if (msg.channel) { document.getElementById('channelName').value = msg.channel || ''; document.getElementById('setupChannel').value = msg.channel || ''; }
+        });
+        socket.on('twitchStatus', (msg) => { updateConnectionStatus(msg.status); if (msg.channel) document.getElementById('twitchStatusText').textContent = 'Verbunden mit #' + msg.channel; });
+        socket.on('twitchError', (msg) => { addChatLine('SYSTEM', 'TWITCH FEHLER: ' + msg.message, 'err'); });
+        socket.on('chatMessage', (msg) => { addChatLine(msg.username, msg.message, ''); });
+        socket.on('command', (msg) => { addChatLine(msg.username, '!' + msg.command + (msg.args && msg.args.length ? ' ' + msg.args.join(' ') : ''), 'cmd'); commandCount++; });
+        socket.on('avatarUpdate', (msg) => { updateAvatarList(msg.avatars || []); });
+        socket.on('bpmUpdate', (msg) => { currentBPM = msg.bpm; updateBPMDisplay(); });
+        socket.on('configSaved', (msg) => { addChatLine('SYSTEM', 'Konfiguration gespeichert!', 'sys'); });
+        socket.on('disconnect', () => { console.log('[Admin] Socket.IO disconnected'); });
+      } catch (e) { console.error('[Admin] Socket.IO failed:', e); setTimeout(connectSocket, 5000); }
+    }
+
+    function sendCmd(type, data = {}) {
+      if (socket && socket.connected) { socket.emit('admin-command', { type, ...data }); }
+      else { console.warn('[Admin] Not connected, cannot send:', type); }
+    }
+
+    // ── Load Config from Server ───────────────────────────────────────────
+    function loadConfigFromServer(config) {
+      if (!config) return;
+      if (config.twitch) {
+        if (config.twitch.channel) { document.getElementById('channelName').value = config.twitch.channel; document.getElementById('setupChannel').value = config.twitch.channel; }
+        if (config.twitch.oauthToken) { document.getElementById('oauthToken').value = config.twitch.oauthToken; document.getElementById('setupOAuth').value = config.twitch.oauthToken; }
+        if (config.twitch.botUsername) { document.getElementById('botUsername').value = config.twitch.botUsername; }
+      }
+      if (config.scene) {
+        if (config.scene.moveZoneYMin !== undefined) { document.getElementById('zoneYMin').value = Math.round(config.scene.moveZoneYMin * 100); document.getElementById('zoneMinVal').textContent = Math.round(config.scene.moveZoneYMin * 100); }
+        if (config.scene.moveZoneYMax !== undefined) { document.getElementById('zoneYMax').value = Math.round(config.scene.moveZoneYMax * 100); document.getElementById('zoneMaxVal').textContent = Math.round(config.scene.moveZoneYMax * 100); }
+        if (config.scene.maxAvatars !== undefined) { document.getElementById('maxAvatars').value = config.scene.maxAvatars; document.getElementById('maxAvatarsVal').textContent = config.scene.maxAvatars; }
+        if (config.scene.inactivityTimeout !== undefined) { document.getElementById('inactivityTimeout').value = Math.round(config.scene.inactivityTimeout / 1000); document.getElementById('timeoutVal').textContent = Math.round(config.scene.inactivityTimeout / 1000); }
+        if (config.scene.avatarScale !== undefined) { document.getElementById('avatarScale').value = Math.round(config.scene.avatarScale * 100); document.getElementById('scaleVal').textContent = config.scene.avatarScale.toFixed(1); }
+      }
+    }
+
+    // ── UI Functions ───────────────────────────────────────────────────────
+    function updateConnectionStatus(status) {
+      const dot = document.getElementById('statusDot'); const text = document.getElementById('statusText');
+      const btnConnect = document.getElementById('btnConnect'); const btnDisconnect = document.getElementById('btnDisconnect');
+      const twitchDot = document.getElementById('twitchDot'); const twitchText = document.getElementById('twitchStatusText');
+      const twitchBar = document.getElementById('twitchStatusBar');
+      if (status === 'connected') {
+        dot.classList.add('connected'); text.textContent = 'Verbunden'; btnConnect.classList.add('hidden'); btnDisconnect.classList.remove('hidden');
+        twitchBar.className = 'twitch-status-bar connected'; twitchDot.classList.add('connected'); twitchText.textContent = 'Verbunden mit Kanal';
+        document.getElementById('setupCard').classList.add('hidden'); document.getElementById('mainDashboard').classList.remove('hidden');
+        connected = true; startTime = Date.now();
+      } else {
+        dot.classList.remove('connected'); text.textContent = 'Nicht verbunden'; btnConnect.classList.remove('hidden'); btnDisconnect.classList.add('hidden');
+        twitchBar.className = 'twitch-status-bar disconnected'; twitchDot.classList.remove('connected'); twitchText.textContent = 'Nicht verbunden';
+        connected = false; startTime = null;
+      }
+    }
+
+    function updateBPMDisplay() {
+      document.getElementById('bpmDisplay').textContent = currentBPM;
+      document.getElementById('bpmDisplayCtrl').textContent = currentBPM;
+      document.getElementById('bpmDisplayAudio').textContent = currentBPM;
+      document.getElementById('statBPM').textContent = currentBPM;
+    }
+
+    function changeBPM(delta) { setBPM(currentBPM + delta); }
+    function setBPM(bpm) { currentBPM = Math.max(40, Math.min(200, bpm)); updateBPMDisplay(); sendCmd('setBPM', { bpm: currentBPM }); }
+
+    // ── Scene Settings (FIXED - now actually sends config!) ──────────────
+    function saveSceneSettings() {
+      const config = {
+        moveZoneYMin: parseInt(document.getElementById('zoneYMin').value) / 100,
+        moveZoneYMax: parseInt(document.getElementById('zoneYMax').value) / 100,
+        maxAvatars: parseInt(document.getElementById('maxAvatars').value),
+        inactivityTimeout: parseInt(document.getElementById('inactivityTimeout').value) * 1000,
+        avatarScale: parseInt(document.getElementById('avatarScale').value) / 100
+      };
+      console.log('[Admin] Saving scene config:', JSON.stringify(config));
+      sendCmd('updateConfig', { config });
+      addChatLine('SYSTEM', 'Szene-Einstellungen gespeichert! Zone Y: ' + Math.round(config.moveZoneYMin*100) + '%-' + Math.round(config.moveZoneYMax*100) + '%, Skalierung: ' + config.avatarScale.toFixed(1) + 'x', 'sys');
+    }
+
+    // ── Audio Source / Beat Detection ─────────────────────────────────────
+    async function refreshAudioDevices() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const select = document.getElementById('audioDeviceSelect');
+        select.innerHTML = '<option value="">-- Gerat wahlen --</option>';
+        devices.filter(d => d.kind === 'audioinput').forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.textContent = d.label || ('Audio-Gerat ' + (select.options.length));
+          select.appendChild(opt);
+        });
+        addChatLine('SYSTEM', devices.filter(d => d.kind === 'audioinput').length + ' Audio-Gerate gefunden', 'sys');
+      } catch (e) { addChatLine('SYSTEM', 'Fehler beim Suchen: ' + e.message, 'err'); }
+    }
+
+    async function connectAudio() {
+      try {
+        const deviceId = document.getElementById('audioDeviceSelect').value;
+        if (!deviceId) { addChatLine('SYSTEM', 'Bitte zuerst ein Audio-Gerat wahlen!', 'err'); return; }
+
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioSource = audioContext.createMediaStreamSource(audioStream);
+        audioAnalyser = audioContext.createAnalyser();
+        audioAnalyser.fftSize = 2048;
+        audioAnalyser.smoothingTimeConstant = 0.3;
+        audioSource.connect(audioAnalyser);
+
+        audioConnected = true;
+        bassEnergyHistory = [];
+        beatTimes = [];
+
+        document.getElementById('audioStatusBar').className = 'audio-status connected';
+        document.getElementById('audioStatusBar').textContent = 'Audio-Quelle verbunden - Beat-Erkennung aktiv';
+        document.getElementById('btnAudioConnect').classList.add('hidden');
+        document.getElementById('btnAudioDisconnect').classList.remove('hidden');
+
+        addChatLine('SYSTEM', 'Audio-Quelle verbunden! Beat-Erkennung gestartet.', 'sys');
+
+        // Start beat detection loop
+        startBeatDetection();
+      } catch (e) {
+        addChatLine('SYSTEM', 'Audio-Fehler: ' + e.message, 'err');
+        console.error('[Admin] Audio connect error:', e);
+      }
+    }
+
+    function disconnectAudio() {
+      audioConnected = false;
+      if (beatDetectorInterval) { clearInterval(beatDetectorInterval); beatDetectorInterval = null; }
+      if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
+      if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
+      audioSource = null; audioAnalyser = null;
+
+      document.getElementById('audioStatusBar').className = 'audio-status disconnected';
+      document.getElementById('audioStatusBar').textContent = 'Audio-Quelle nicht verbunden';
+      document.getElementById('btnAudioConnect').classList.remove('hidden');
+      document.getElementById('btnAudioDisconnect').classList.add('hidden');
+      document.getElementById('audioLevelFill').style.width = '0%';
+      document.getElementById('audioBpmDisplay').textContent = '--';
+
+      addChatLine('SYSTEM', 'Audio-Quelle getrennt.', 'sys');
+    }
+
+    function startBeatDetection() {
+      if (beatDetectorInterval) clearInterval(beatDetectorInterval);
+      const bufferLength = audioAnalyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      beatDetectorInterval = setInterval(() => {
+        if (!audioConnected || !audioAnalyser) return;
+
+        audioAnalyser.getByteFrequencyData(dataArray);
+
+        // Focus on bass frequencies (bins 0-10 ≈ 0-215 Hz at 44100kHz)
+        let bassSum = 0;
+        const bassBins = Math.min(12, bufferLength);
+        for (let i = 0; i < bassBins; i++) { bassSum += dataArray[i]; }
+        const bassAvg = bassSum / bassBins;
+
+        // Overall audio level for display
+        let totalSum = 0;
+        for (let i = 0; i < bufferLength; i++) { totalSum += dataArray[i]; }
+        const totalAvg = totalSum / bufferLength;
+        const levelPercent = Math.min(100, (totalAvg / 128) * 100);
+        document.getElementById('audioLevelFill').style.width = levelPercent + '%';
+
+        // Track bass energy history
+        bassEnergyHistory.push(bassAvg);
+        if (bassEnergyHistory.length > BASS_HISTORY_SIZE) bassEnergyHistory.shift();
+
+        // Calculate running average
+        const runningAvg = bassEnergyHistory.reduce((a, b) => a + b, 0) / bassEnergyHistory.length;
+
+        // Beat detection: current bass > average * sensitivity
+        const now = Date.now();
+        const minBeatInterval = 200; // Max 300 BPM
+
+        if (bassAvg > runningAvg * audioSensitivity && bassAvg > 40 && (now - lastBeatTime) > minBeatInterval) {
+          lastBeatTime = now;
+
+          // Calculate BPM from beat intervals
+          beatTimes.push(now);
+          if (beatTimes.length > 16) beatTimes.shift();
+
+          if (beatTimes.length >= 3) {
+            const intervals = [];
+            for (let i = 1; i < beatTimes.length; i++) { intervals.push(beatTimes[i] - beatTimes[i-1]); }
+            // Remove outliers (intervals deviating more than 2x from median)
+            intervals.sort((a, b) => a - b);
+            const median = intervals[Math.floor(intervals.length / 2)];
+            const filtered = intervals.filter(i => i > median * 0.5 && i < median * 1.5);
+            if (filtered.length >= 2) {
+              const avgInterval = filtered.reduce((a, b) => a + b, 0) / filtered.length;
+              audioBPM = Math.round(60000 / avgInterval);
+              audioBPM = Math.max(40, Math.min(200, audioBPM));
+              currentBPM = audioBPM;
+              updateBPMDisplay();
+            }
+          }
+
+          // Send beat pulse to server → overlay
+          sendCmd('audioBeatPulse', { bpm: audioBPM || currentBPM });
+
+          // Visual beat indicator
+          const indicator = document.getElementById('beatIndicator');
+          indicator.classList.add('active');
+          setTimeout(() => indicator.classList.remove('active'), 150);
+        }
+      }, 20); // 50fps detection
+    }
+
+    // ── Tap Tempo ─────────────────────────────────────────────────────────
+    function tapTempo() {
+      const now = Date.now();
+      tapTimes.push(now);
+      if (tapTimes.length > 8) tapTimes.shift();
+      if (tapTimes.length >= 2) {
+        // Remove old taps (> 3 seconds gap = reset)
+        while (tapTimes.length > 1 && (now - tapTimes[0]) > 3000) tapTimes.shift();
+        if (tapTimes.length >= 2) {
+          const intervals = [];
+          for (let i = 1; i < tapTimes.length; i++) intervals.push(tapTimes[i] - tapTimes[i-1]);
+          const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          const bpm = Math.round(60000 / avg);
+          setBPM(bpm);
+        }
+      }
+    }
+
+    // ── Twitch ─────────────────────────────────────────────────────────────
+    function connectTwitch() {
+      const channel = document.getElementById('channelName').value.trim();
+      const oauth = document.getElementById('oauthToken').value.trim();
+      const botUsername = document.getElementById('botUsername').value.trim();
+      if (!channel || !oauth) { addChatLine('SYSTEM', 'Kanalname und OAuth Token erforderlich!', 'err'); return; }
+      addChatLine('SYSTEM', 'Verbindung wird hergestellt...', 'sys');
+      sendCmd('connectTwitch', { channel, oauthToken: oauth, botUsername: botUsername || channel });
+    }
+    function disconnectTwitch() { addChatLine('SYSTEM', 'Trenne Verbindung...', 'sys'); sendCmd('disconnectTwitch'); }
+    function setupConnect() {
+      const channel = document.getElementById('setupChannel').value.trim();
+      const oauth = document.getElementById('setupOAuth').value.trim();
+      if (!channel || !oauth) { addChatLine('SYSTEM', 'Kanalname und OAuth Token erforderlich!', 'err'); return; }
+      document.getElementById('channelName').value = channel;
+      document.getElementById('oauthToken').value = oauth;
+      connectTwitch();
+    }
+
+    // ── Party Mode ─────────────────────────────────────────────────────────
+    function setPartyMode(mode) { sendCmd('partyMode', { mode }); }
+    function forceAllEmote() {
+      const emote = document.getElementById('forceEmoteSelect').value;
+      if (emote) sendCmd('partyMode', { mode: 'forceEmote', emote });
+    }
+
+    // ── Avatar Management ──────────────────────────────────────────────────
+    function addAvatarManual() {
+      const username = document.getElementById('addAvatarInput').value.trim();
+      if (!username) return;
+      sendCmd('spawnAvatar', { username });
+      document.getElementById('addAvatarInput').value = '';
+    }
+    function removeAllAvatars() {
+      for (const av of currentAvatarList) sendCmd('removeAvatar', { username: av.username });
+    }
+    function triggerEmoteForUser() {
+      const username = document.getElementById('emoteTargetUser').value.trim();
+      const emote = document.getElementById('emoteForUser').value;
+      if (!username || !emote) return;
+      sendCmd('triggerEmote', { username, emote });
+    }
+    function updateAvatarList(avatars) {
+      currentAvatarList = avatars || [];
+      document.getElementById('avatarCount').textContent = currentAvatarList.length;
+      document.getElementById('statAvatars').textContent = currentAvatarList.length;
+      const list = document.getElementById('avatarList');
+      list.innerHTML = '';
+      for (const av of currentAvatarList) {
+        const li = document.createElement('li');
+        li.className = 'avatar-item';
+        const ago = Math.round((Date.now() - av.lastActivity) / 1000);
+        li.innerHTML = '<div class="avatar-dot' + (ago > 60 ? ' inactive' : '') + '"></div>' +
+          '<span class="avatar-name">' + av.username + '</span>' +
+          '<span class="avatar-emote">' + (av.currentEmote || 'idle') + '</span>' +
+          '<span class="avatar-time">' + ago + 's</span>' +
+          '<button class="avatar-trigger" onclick="sendCmd(\'triggerEmote\',{username:\'' + av.username + '\',emote:\'disco\'})">Tanzen</button>' +
+          '<button class="avatar-remove" onclick="sendCmd(\'removeAvatar\',{username:\'' + av.username + '\'})">X</button>';
+        list.appendChild(li);
+      }
+    }
+
+    // ── Chat Log ───────────────────────────────────────────────────────────
+    function addChatLine(user, text, type) {
+      const log = document.getElementById('chatLog');
+      const line = document.createElement('div');
+      line.className = 'chat-line';
+      const cls = type === 'cmd' ? 'ch-cmd' : type === 'err' ? 'ch-err' : type === 'sys' ? 'ch-sys' : '';
+      line.innerHTML = '<span class="ch-user">[' + user + ']</span> <span class="' + cls + '">' + text + '</span>';
+      log.appendChild(line);
+      if (log.children.length > 100) log.removeChild(log.firstChild);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // ── Presets ────────────────────────────────────────────────────────────
+    const savedPresets = [];
+    function savePreset() {
+      const name = document.getElementById('presetName').value.trim();
+      if (!name) return;
+      savedPresets.push({ name, date: new Date().toLocaleString('de-DE'), config: { moveZoneYMin: parseInt(document.getElementById('zoneYMin').value)/100, moveZoneYMax: parseInt(document.getElementById('zoneYMax').value)/100, maxAvatars: parseInt(document.getElementById('maxAvatars').value), inactivityTimeout: parseInt(document.getElementById('inactivityTimeout').value)*1000, avatarScale: parseInt(document.getElementById('avatarScale').value)/100 } });
+      document.getElementById('presetName').value = '';
+      renderPresets();
+    }
+    function loadPreset(idx) {
+      const p = savedPresets[idx];
+      if (!p) return;
+      sendCmd('updateConfig', { config: p.config });
+      loadConfigFromServer({ scene: p.config });
+      addChatLine('SYSTEM', 'Preset "' + p.name + '" geladen', 'sys');
+    }
+    function renderPresets() {
+      const list = document.getElementById('presetList');
+      list.innerHTML = '';
+      if (savedPresets.length === 0) { list.innerHTML = '<p style="color:var(--text2);font-size:12px">Noch keine Presets gespeichert.</p>'; return; }
+      savedPresets.forEach((p, i) => {
+        const div = document.createElement('div');
+        div.className = 'preset-item';
+        div.innerHTML = '<span class="preset-name">' + p.name + '</span><span class="preset-date">' + p.date + '</span><button class="btn btn-primary btn-xs" onclick="loadPreset(' + i + ')">Laden</button>';
+        list.appendChild(div);
+      });
+    }
+
+    // ── Emote Grids ────────────────────────────────────────────────────────
+    function buildEmoteGrids() {
+      for (const [cat, emotes] of Object.entries(DANCE_EMOTES)) {
+        const grid = document.getElementById('emoteGrid-' + cat);
+        if (!grid) continue;
+        emotes.forEach(e => { const chip = document.createElement('span'); chip.className = 'emote-chip'; chip.textContent = e; chip.onclick = () => sendCmd('partyMode', { mode: 'forceEmote', emote: e }); grid.appendChild(chip); });
+      }
+      for (const [cat, emotes] of Object.entries(SOCIAL_EMOTES)) {
+        const grid = document.getElementById('emoteGrid-' + cat);
+        if (!grid) continue;
+        emotes.forEach(e => { const chip = document.createElement('span'); chip.className = 'emote-chip social'; chip.textContent = e; chip.onclick = () => sendCmd('triggerEmote', { username: '__all__', emote: e }); grid.appendChild(chip); });
+      }
+      // Populate force emote select
+      const select = document.getElementById('forceEmoteSelect');
+      const allDances = Object.values(DANCE_EMOTES).flat();
+      allDances.forEach(e => { const opt = document.createElement('option'); opt.value = e; opt.textContent = e; select.appendChild(opt); });
+      // Populate emote for user select
+      const userSelect = document.getElementById('emoteForUser');
+      const allEmotes = [...Object.values(DANCE_EMOTES).flat(), ...Object.values(SOCIAL_EMOTES).flat()];
+      allEmotes.forEach(e => { const opt = document.createElement('option'); opt.value = e; opt.textContent = e; userSelect.appendChild(opt); });
+    }
+
+    // ── Uptime Timer ───────────────────────────────────────────────────────
+    setInterval(() => {
+      if (!startTime) return;
+      const s = Math.floor((Date.now() - startTime) / 1000);
+      const m = Math.floor(s / 60);
+      document.getElementById('statUptime').textContent = m + ':' + String(s % 60).padStart(2, '0');
+      document.getElementById('statCommands').textContent = Math.round(commandCount / (Math.max(1, s / 60)));
+    }, 1000);
+
+    // ── Init ───────────────────────────────────────────────────────────────
+    connectSocket();
+    buildEmoteGrids();
+    refreshAudioDevices();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>VirtualClubDancers Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #error-overlay {
+      display: none;
+      position: fixed;
+      top: 10px; left: 10px;
+      background: rgba(255,0,0,0.8);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      z-index: 9999;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="overlay-canvas"></canvas>
+  <div id="error-overlay"></div>
+
+  <!-- Socket.IO client from CDN (works in OBS Browser Source) -->
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+
+  <script>
+/**
+ * VirtualClubDancers v2.0.0 - Overlay Renderer
+ * Self-contained Canvas2D + Socket.IO for OBS Browser Source
+ * Connects to http://localhost:3333 via Socket.IO
+ * TRANSPARENT canvas - ONLY avatars rendered, no background
+ */
+
+// ── Error Display ──────────────────────────────────────────────────────────
+function showError(msg) {
+  const el = document.getElementById('error-overlay');
+  if (el) { el.textContent = msg; el.style.display = 'block'; }
+  setTimeout(() => { if (el) el.style.display = 'none'; }, 8000);
+}
+
+// ── Canvas Setup ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('overlay-canvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ── Configuration ──────────────────────────────────────────────────────────
+const CONFIG = {
+  moveZoneYMin: 0.55,
+  moveZoneYMax: 0.90,
+  moveZoneXMin: 0.05,
+  moveZoneXMax: 0.95,
+  maxAvatars: 50,
+  inactivityTimeout: 120000,
+  idleSwitchInterval: [5000, 15000],
+  fps: 60,
+  avatarBaseHeight: 160,
+  avatarBaseWidth: 100,
+  avatarScale: 4.0,
+  perspectiveScaleMin: 0.7,
+  perspectiveScaleMax: 1.0,
+  bpm: 120,
+  personalSpaceRadius: 0.12,
+  pushStrength: 0.55
+};
+
+// ── Animation Data ─────────────────────────────────────────────────────────
+let ANIMATIONS = {};
+let currentBPM = 120;
+let beatPhase = 0;
+let lastRealBeatTime = 0;
+let realBeatActive = false;
+const avatars = new Map();
+
+// ── Apply Config from Server ──────────────────────────────────────────────
+function applyConfig(c) {
+  if (c.moveZoneYMin !== undefined) CONFIG.moveZoneYMin = c.moveZoneYMin;
+  if (c.moveZoneYMax !== undefined) CONFIG.moveZoneYMax = c.moveZoneYMax;
+  if (c.moveZoneXMin !== undefined) CONFIG.moveZoneXMin = c.moveZoneXMin;
+  if (c.moveZoneXMax !== undefined) CONFIG.moveZoneXMax = c.moveZoneXMax;
+  if (c.maxAvatars !== undefined) CONFIG.maxAvatars = c.maxAvatars;
+  if (c.inactivityTimeout !== undefined) CONFIG.inactivityTimeout = c.inactivityTimeout;
+  if (c.avatarScale !== undefined) CONFIG.avatarScale = c.avatarScale;
+  if (c.personalSpaceRadius !== undefined) CONFIG.personalSpaceRadius = c.personalSpaceRadius;
+  if (c.pushStrength !== undefined) CONFIG.pushStrength = c.pushStrength;
+  console.log('[Overlay] Config applied:', JSON.stringify(c));
+  // Force all avatars to pick new targets within updated zone
+  for (const avatar of avatars.values()) {
+    avatar.x = clamp(avatar.x, CONFIG.moveZoneXMin, CONFIG.moveZoneXMax);
+    avatar.y = clamp(avatar.y, CONFIG.moveZoneYMin, CONFIG.moveZoneYMax);
+    avatar.pickNewTarget();
+  }
+}
+const particles = [];
+
+// ── Utility Functions ──────────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function randRange(min, max) { return min + Math.random() * (max - min); }
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
+// ── Color Palette ──────────────────────────────────────────────────────────
+const SKIN_TONES = ['#FFDBAC', '#F1C27D', '#E0AC69', '#C68642', '#8D5524'];
+const SHIRT_COLORS = ['#E53935', '#1E88E5', '#43A047', '#FDD835', '#8E24AA', '#FB8C00', '#00ACC1', '#F4511E', '#5E35B1', '#00897B'];
+const PANTS_COLORS = ['#1A237E', '#1565C0', '#0D47A1', '#212121', '#3E2723', '#4E342E', '#37474F'];
+const HAIR_COLORS = ['#3E2723', '#5D4037', '#212121', '#F9A825', '#D84315', '#4E342E'];
+
+function getAvatarColors(username) {
+  const h = hashString(username);
+  return {
+    skin: SKIN_TONES[h % SKIN_TONES.length],
+    shirt: SHIRT_COLORS[(h >> 4) % SHIRT_COLORS.length],
+    pants: PANTS_COLORS[(h >> 8) % PANTS_COLORS.length],
+    hair: HAIR_COLORS[(h >> 12) % HAIR_COLORS.length]
+  };
+}
+
+// ── Find Spawn Position (spread across stage) ─────────────────────────────
+function findSpawnPosition() {
+  const avatarCount = avatars.size;
+  const stageWidth = CONFIG.moveZoneXMax - CONFIG.moveZoneXMin;
+
+  if (avatarCount < 15) {
+    const cols = Math.max(5, Math.ceil(avatarCount / 2));
+    const colWidth = stageWidth / cols;
+    const colCounts = new Array(cols).fill(0);
+
+    for (const avatar of avatars.values()) {
+      const col = Math.floor((avatar.x - CONFIG.moveZoneXMin) / colWidth);
+      if (col >= 0 && col < cols) colCounts[col]++;
+    }
+
+    let minCol = 0, minCount = Infinity;
+    for (let i = 0; i < cols; i++) {
+      if (colCounts[i] < minCount) { minCount = colCounts[i]; minCol = i; }
+    }
+
+    const x = CONFIG.moveZoneXMin + (minCol + 0.5) * colWidth + randRange(-colWidth * 0.2, colWidth * 0.2);
+    const y = randRange(CONFIG.moveZoneYMin + 0.05, CONFIG.moveZoneYMax - 0.05);
+    return {
+      x: clamp(x, CONFIG.moveZoneXMin + 0.02, CONFIG.moveZoneXMax - 0.02),
+      y: clamp(y, CONFIG.moveZoneYMin + 0.02, CONFIG.moveZoneYMax - 0.05)
+    };
+  }
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const x = randRange(CONFIG.moveZoneXMin + 0.03, CONFIG.moveZoneXMax - 0.03);
+    const y = randRange(CONFIG.moveZoneYMin + 0.03, CONFIG.moveZoneYMax - 0.05);
+    let tooClose = false;
+    for (const avatar of avatars.values()) {
+      const dx = avatar.x - x, dy = avatar.y - y;
+      if (Math.sqrt(dx * dx + dy * dy) < CONFIG.personalSpaceRadius) { tooClose = true; break; }
+    }
+    if (!tooClose) return { x, y };
+  }
+
+  return {
+    x: randRange(CONFIG.moveZoneXMin + 0.05, CONFIG.moveZoneXMax - 0.05),
+    y: randRange(CONFIG.moveZoneYMin + 0.02, CONFIG.moveZoneYMax - 0.05)
+  };
+}
+
+// ── Avatar Class ───────────────────────────────────────────────────────────
+class Avatar {
+  constructor(username, canvasWidth, canvasHeight, customColors) {
+    this.username = username;
+    this.colors = customColors || getAvatarColors(username);
+
+    const spawnPos = findSpawnPosition();
+    this.x = spawnPos.x;
+    this.y = spawnPos.y;
+    this.targetX = this.x;
+    this.targetY = this.y;
+    this.facing = this.x > 0.5 ? -1 : 1;
+
+    this.currentEmote = null;
+    this.emoteFrame = 0;
+    this.emoteFrameTime = 0;
+    this.emoteSpeed = 24;
+    this.emoteStartTime = 0;
+    this.emoteLoopsCompleted = 0;
+    this.maxLoops = 0;
+
+    this.idleState = 'walking';
+    this.idleTimer = 0;
+    this.idleSwitchAt = randRange(CONFIG.idleSwitchInterval[0], CONFIG.idleSwitchInterval[1]);
+    this.walkCycle = 0;
+    this.bopPhase = 0;
+    this.lookPhase = 0;
+
+    this.joints = { head: 0, torso: 0, leftUpperArm: 0.3, leftLowerArm: 0, rightUpperArm: -0.3, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 };
+    this.targetJoints = { ...this.joints };
+
+    this.opacity = 0;
+    this.fadeIn = true;
+    this.fadeOut = false;
+    this.scale = 1.0;
+    this.verticalOffset = 0;
+    this.propType = null;
+    this.lastActivity = Date.now();
+
+    const h = hashString(username);
+    this.accessory = this.getAccessoryType(h);
+    this.canvasWidth = canvasWidth;
+    this.canvasHeight = canvasHeight;
+    this.pickNewTarget();
+  }
+
+  getAccessoryType(hash) {
+    const types = ['none', 'headphones', 'cap', 'beanie', 'sunglasses', 'mohawk', 'tophat'];
+    return types[(hash >> 16) % types.length];
+  }
+
+  getPerspectiveScale() {
+    const yNorm = (this.y - CONFIG.moveZoneYMin) / (CONFIG.moveZoneYMax - CONFIG.moveZoneYMin);
+    return lerp(CONFIG.perspectiveScaleMin, CONFIG.perspectiveScaleMax, clamp(yNorm, 0, 1));
+  }
+
+  getPixelPosition() {
+    return { x: this.x * this.canvasWidth, y: this.y * this.canvasHeight + this.verticalOffset };
+  }
+
+  pickNewTarget() {
+    for (let attempt = 0; attempt < 15; attempt++) {
+      const tx = randRange(CONFIG.moveZoneXMin + 0.02, CONFIG.moveZoneXMax - 0.02);
+      const ty = randRange(CONFIG.moveZoneYMin + 0.03, CONFIG.moveZoneYMax - 0.05);
+      let tooClose = false;
+      for (const avatar of avatars.values()) {
+        if (avatar.username === this.username) continue;
+        const dx = avatar.x - tx, dy = avatar.y - ty;
+        if (Math.sqrt(dx * dx + dy * dy) < CONFIG.personalSpaceRadius * 0.9) { tooClose = true; break; }
+      }
+      if (!tooClose || attempt === 14) {
+        this.targetX = tx; this.targetY = ty;
+        this.facing = this.targetX > this.x ? 1 : -1;
+        return;
+      }
+    }
+  }
+
+  setEmote(emoteName) {
+    const aliases = { 'winken': 'winken', 'wave': 'winken', 'lachen': 'lachen', 'laugh': 'lachen', 'dance': 'disco' };
+    const resolvedName = aliases[emoteName] || emoteName;
+
+    if (ANIMATIONS[resolvedName]) {
+      this.currentEmote = resolvedName;
+      this.emoteFrame = 0;
+      this.emoteFrameTime = 0;
+      this.emoteStartTime = performance.now();
+      this.emoteLoopsCompleted = 0;
+      this.lastActivity = Date.now();
+
+      const anim = ANIMATIONS[resolvedName];
+      this.emoteSpeed = anim.fps || 24;
+      this.maxLoops = (anim.category === 'social' && !anim.loop) ? 1 : 0;
+      this.propType = ['drink', 'eat', 'cheer'].includes(resolvedName) ? resolvedName : null;
+      return true;
+    }
+    return false;
+  }
+
+  clearEmote() {
+    this.currentEmote = null;
+    this.emoteFrame = 0;
+    this.propType = null;
+    this.idleState = 'walking';
+  }
+
+  update(dt, beatInfo) {
+    if (this.fadeIn) {
+      this.opacity = Math.min(1, this.opacity + dt * 2);
+      if (this.opacity >= 1) this.fadeIn = false;
+    }
+    if (this.fadeOut) {
+      this.opacity = Math.max(0, this.opacity - dt * 0.5);
+      return this.opacity <= 0;
+    }
+
+    this.scale = this.getPerspectiveScale();
+
+    if (this.currentEmote) { this.updateEmoteAnimation(dt); }
+    else { this.updateIdle(dt, beatInfo); }
+
+    if (!this.currentEmote && this.idleState === 'walking') { this.updateMovement(dt); }
+    this.applySpreading(dt);
+
+    for (const joint in this.joints) {
+      this.joints[joint] = lerp(this.joints[joint], this.targetJoints[joint], 0.25);
+    }
+    return false;
+  }
+
+  updateEmoteAnimation(dt) {
+    const anim = ANIMATIONS[this.currentEmote];
+    if (!anim) return;
+
+    this.emoteFrameTime += dt;
+    const frameDuration = 1 / this.emoteSpeed;
+
+    if (this.emoteFrameTime >= frameDuration) {
+      this.emoteFrameTime -= frameDuration;
+      this.emoteFrame++;
+      if (this.emoteFrame >= anim.frames.length) {
+        this.emoteLoopsCompleted++;
+        if (!anim.loop || (this.maxLoops > 0 && this.emoteLoopsCompleted >= this.maxLoops)) {
+          this.clearEmote(); return;
+        }
+        this.emoteFrame = 0;
+      }
+    }
+
+    const frame = anim.frames[this.emoteFrame];
+    if (frame) {
+      for (const joint in frame) {
+        if (this.targetJoints.hasOwnProperty(joint)) { this.targetJoints[joint] = frame[joint]; }
+      }
+    }
+
+    if (['jump', 'bounce', 'beatbounce', 'drop', 'bassdrop'].includes(this.currentEmote)) {
+      const jumpAnim = Math.abs(this.targetJoints.leftUpperLeg) + Math.abs(this.targetJoints.rightUpperLeg);
+      this.verticalOffset = -jumpAnim * 15 * this.scale;
+    } else {
+      this.verticalOffset = lerp(this.verticalOffset, 0, 0.1);
+    }
+  }
+
+  updateIdle(dt, beatInfo) {
+    this.idleTimer += dt * 1000;
+    if (this.idleTimer >= this.idleSwitchAt) {
+      this.idleTimer = 0;
+      this.idleSwitchAt = randRange(CONFIG.idleSwitchInterval[0], CONFIG.idleSwitchInterval[1]);
+      // When beat is active, prefer bopping
+      const states = beatInfo && beatInfo.active ? ['bopping', 'bopping', 'walking'] : ['walking', 'bopping', 'looking'];
+      this.idleState = states[Math.floor(Math.random() * states.length)];
+    }
+    switch (this.idleState) {
+      case 'walking': this.updateWalkAnimation(dt, beatInfo); break;
+      case 'bopping': this.updateBopAnimation(dt, beatInfo); break;
+      case 'looking': this.updateLookAnimation(dt); break;
+    }
+    // Beat bounce: add a subtle vertical bounce on each beat
+    if (beatInfo && beatInfo.active) {
+      this.verticalOffset = lerp(this.verticalOffset, -8 * this.scale * CONFIG.avatarScale, 0.4);
+    } else {
+      this.verticalOffset = lerp(this.verticalOffset, 0, 0.15);
+    }
+  }
+
+  updateWalkAnimation(dt, beatInfo) {
+    const speed = (beatInfo && beatInfo.bpm) ? beatInfo.bpm / 120 : 1;
+    this.walkCycle += dt * 4 * speed;
+    const t = this.walkCycle;
+    this.targetJoints.leftUpperLeg = Math.sin(t) * 0.4;
+    this.targetJoints.leftLowerLeg = Math.max(0, Math.sin(t) * 0.3);
+    this.targetJoints.rightUpperLeg = Math.sin(t + Math.PI) * 0.4;
+    this.targetJoints.rightLowerLeg = Math.max(0, Math.sin(t + Math.PI) * 0.3);
+    this.targetJoints.leftUpperArm = Math.sin(t + Math.PI) * 0.3;
+    this.targetJoints.rightUpperArm = Math.sin(t) * 0.3;
+    this.targetJoints.torso = Math.sin(t * 0.5) * 0.02;
+    this.targetJoints.head = Math.sin(t * 0.5) * 0.03;
+  }
+
+  updateBopAnimation(dt, beatInfo) {
+    const speed = (beatInfo && beatInfo.bpm) ? beatInfo.bpm / 120 : 1;
+    this.bopPhase += dt * 4 * speed;
+    const t = this.bopPhase;
+    this.targetJoints.torso = Math.sin(t) * 0.08;
+    this.targetJoints.head = Math.sin(t * 2) * 0.12;
+    this.targetJoints.leftUpperArm = -0.2 + Math.sin(t) * 0.15;
+    this.targetJoints.rightUpperArm = 0.2 + Math.sin(t + Math.PI) * 0.15;
+    this.targetJoints.leftLowerArm = Math.sin(t + 1) * 0.1;
+    this.targetJoints.rightLowerArm = Math.sin(t + 1 + Math.PI) * 0.1;
+    this.targetJoints.leftUpperLeg = 0; this.targetJoints.leftLowerLeg = 0;
+    this.targetJoints.rightUpperLeg = 0; this.targetJoints.rightLowerLeg = 0;
+  }
+
+  updateLookAnimation(dt) {
+    this.lookPhase += dt * 1.5;
+    const t = this.lookPhase;
+    this.targetJoints.head = Math.sin(t) * 0.35;
+    this.targetJoints.torso = Math.sin(t * 0.5) * 0.05;
+    this.targetJoints.leftUpperArm = -0.15; this.targetJoints.rightUpperArm = 0.15;
+    this.targetJoints.leftLowerArm = 0; this.targetJoints.rightLowerArm = 0;
+    this.targetJoints.leftUpperLeg = 0; this.targetJoints.leftLowerLeg = 0;
+    this.targetJoints.rightUpperLeg = 0; this.targetJoints.rightLowerLeg = 0;
+  }
+
+  updateMovement(dt) {
+    const dx = this.targetX - this.x, dy = this.targetY - this.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 0.025) { this.pickNewTarget(); }
+    else {
+      const speed = 0.06 * dt;
+      this.x += (dx / dist) * speed;
+      this.y += (dy / dist) * speed;
+      this.x = clamp(this.x, CONFIG.moveZoneXMin, CONFIG.moveZoneXMax);
+      this.y = clamp(this.y, CONFIG.moveZoneYMin, CONFIG.moveZoneYMax);
+      this.facing = dx > 0 ? 1 : -1;
+    }
+  }
+
+  applySpreading(dt) {
+    let pushX = 0, pushY = 0;
+    for (const avatar of avatars.values()) {
+      if (avatar.username === this.username) continue;
+      const dx = this.x - avatar.x, dy = this.y - avatar.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < CONFIG.personalSpaceRadius && dist > 0.001) {
+        const overlap = CONFIG.personalSpaceRadius - dist;
+        const force = overlap * CONFIG.pushStrength * dt;
+        pushX += (dx / dist) * force;
+        pushY += (dy / dist) * force;
+      }
+    }
+    this.x = clamp(this.x + pushX, CONFIG.moveZoneXMin, CONFIG.moveZoneXMax);
+    this.y = clamp(this.y + pushY, CONFIG.moveZoneYMin, CONFIG.moveZoneYMax);
+  }
+
+  // ── Drawing ─────────────────────────────────────────────────────────────
+  draw(ctx) {
+    const pos = this.getPixelPosition();
+    const s = this.scale * CONFIG.avatarScale;
+    const w = CONFIG.avatarBaseWidth * s;
+    const h = CONFIG.avatarBaseHeight * s;
+
+    ctx.save();
+    ctx.globalAlpha = this.opacity;
+    ctx.translate(pos.x, pos.y);
+    ctx.scale(this.facing, 1);
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath();
+    ctx.ellipse(0, h * 0.48 - this.verticalOffset * 0.3, w * 0.35, h * 0.03, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    this.drawLegs(ctx, s);
+    this.drawBody(ctx, s);
+    this.drawArms(ctx, s);
+    this.drawHead(ctx, s);
+    if (this.propType) this.drawProp(ctx, s);
+    ctx.restore();
+
+    this.drawUsername(ctx, pos.x, pos.y - h * 0.6 + this.verticalOffset, s);
+  }
+
+  drawBody(ctx, s) {
+    const w = CONFIG.avatarBaseWidth * s, h = CONFIG.avatarBaseHeight * s;
+    ctx.save();
+    ctx.translate(0, -h * 0.25);
+    ctx.rotate(this.joints.torso);
+    ctx.fillStyle = this.colors.shirt;
+    const tW = w * 0.55, tH = h * 0.32;
+    ctx.beginPath(); ctx.roundRect(-tW / 2, -tH / 2, tW, tH, 4 * s); ctx.fill();
+    ctx.strokeStyle = this.darkenColor(this.colors.shirt, 0.25);
+    ctx.lineWidth = 1.5 * s; ctx.stroke();
+    ctx.fillStyle = this.darkenColor(this.colors.shirt, 0.15);
+    ctx.beginPath(); ctx.roundRect(-tW * 0.25, -tH / 2, tW * 0.5, tH * 0.1, 2 * s); ctx.fill();
+    ctx.restore();
+  }
+
+  drawHead(ctx, s) {
+    const w = CONFIG.avatarBaseWidth * s, h = CONFIG.avatarBaseHeight * s;
+    const headR = w * 0.35;
+    ctx.save();
+    ctx.translate(0, -h * 0.55);
+    ctx.rotate(this.joints.head);
+
+    ctx.fillStyle = this.colors.skin;
+    ctx.beginPath(); ctx.arc(0, 0, headR, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = this.darkenColor(this.colors.skin, 0.3);
+    ctx.lineWidth = 1.5 * s; ctx.stroke();
+
+    this.drawHair(ctx, headR, s);
+
+    const eyeY = -headR * 0.05, eyeX = headR * 0.25, eyeR = headR * 0.12;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.ellipse(-eyeX, eyeY, eyeR * 1.4, eyeR * 1.1, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(eyeX, eyeY, eyeR * 1.4, eyeR * 1.1, 0, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#1A1A1A';
+    ctx.beginPath(); ctx.arc(-eyeX + eyeR * 0.3, eyeY, eyeR * 0.65, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(eyeX + eyeR * 0.3, eyeY, eyeR * 0.65, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.arc(-eyeX + eyeR * 0.1, eyeY - eyeR * 0.3, eyeR * 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(eyeX + eyeR * 0.1, eyeY - eyeR * 0.3, eyeR * 0.2, 0, Math.PI * 2); ctx.fill();
+
+    ctx.strokeStyle = this.darkenColor(this.colors.skin, 0.45);
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath(); ctx.arc(0, headR * 0.25, headR * 0.2, 0.15, Math.PI - 0.15); ctx.stroke();
+
+    this.drawAccessory(ctx, headR, s);
+    ctx.restore();
+  }
+
+  drawHair(ctx, headR, s) {
+    ctx.fillStyle = this.colors.hair;
+    ctx.beginPath(); ctx.ellipse(0, -headR * 0.7, headR * 1.05, headR * 0.5, 0, Math.PI, 0); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-headR * 0.85, -headR * 0.1, headR * 0.25, headR * 0.5, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(headR * 0.85, -headR * 0.1, headR * 0.25, headR * 0.5, 0.2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  drawAccessory(ctx, headR, s) {
+    switch (this.accessory) {
+      case 'headphones':
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 3 * s;
+        ctx.beginPath(); ctx.arc(0, -headR * 0.1, headR * 1.1, Math.PI + 0.3, -0.3); ctx.stroke();
+        ctx.fillStyle = '#444';
+        ctx.fillRect(-headR * 1.2, -headR * 0.2, headR * 0.3, headR * 0.5);
+        ctx.fillRect(headR * 0.9, -headR * 0.2, headR * 0.3, headR * 0.5);
+        break;
+      case 'cap':
+        ctx.fillStyle = '#1565C0';
+        ctx.beginPath(); ctx.ellipse(0, -headR * 0.75, headR * 1.15, headR * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(headR * 0.3, -headR * 0.6, headR * 0.7, headR * 0.12, -0.1, 0, Math.PI * 2); ctx.fill();
+        break;
+      case 'beanie':
+        ctx.fillStyle = '#BF360C';
+        ctx.beginPath(); ctx.ellipse(0, -headR * 0.6, headR * 1.0, headR * 0.55, 0, Math.PI, 0); ctx.fill();
+        ctx.beginPath(); ctx.arc(0, -headR * 1.1, headR * 0.15, 0, Math.PI * 2); ctx.fill();
+        break;
+      case 'sunglasses':
+        ctx.fillStyle = '#1A1A1A';
+        ctx.beginPath(); ctx.roundRect(-headR * 0.6, -headR * 0.15, headR * 0.45, headR * 0.3, headR * 0.08); ctx.fill();
+        ctx.beginPath(); ctx.roundRect(headR * 0.15, -headR * 0.15, headR * 0.45, headR * 0.3, headR * 0.08); ctx.fill();
+        ctx.strokeStyle = '#1A1A1A'; ctx.lineWidth = 2 * s;
+        ctx.beginPath(); ctx.moveTo(-headR * 0.15, -headR * 0.02); ctx.lineTo(headR * 0.15, -headR * 0.02); ctx.stroke();
+        break;
+      case 'mohawk':
+        ctx.fillStyle = this.colors.hair;
+        for (let i = 0; i < 7; i++) {
+          const sx = -headR * 0.35 + i * headR * 0.1;
+          const sH = headR * (0.5 + Math.sin(i * 0.8) * 0.3);
+          ctx.beginPath(); ctx.moveTo(sx, -headR * 0.8); ctx.lineTo(sx + headR * 0.08, -headR * 0.8 - sH); ctx.lineTo(sx + headR * 0.16, -headR * 0.8); ctx.fill();
+        }
+        break;
+      case 'tophat':
+        ctx.fillStyle = '#212121';
+        ctx.beginPath(); ctx.ellipse(0, -headR * 0.75, headR * 1.2, headR * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillRect(-headR * 0.55, -headR * 1.6, headR * 1.1, headR * 0.85);
+        ctx.beginPath(); ctx.ellipse(0, -headR * 1.6, headR * 0.55, headR * 0.12, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#F44336';
+        ctx.fillRect(-headR * 0.55, -headR * 0.9, headR * 1.1, headR * 0.12);
+        break;
+    }
+  }
+
+  drawArms(ctx, s) {
+    const w = CONFIG.avatarBaseWidth * s, h = CONFIG.avatarBaseHeight * s;
+    this.drawLimb(ctx, s, -w * 0.28, -h * 0.38, this.joints.leftUpperArm, this.joints.leftLowerArm, w * 0.14, h * 0.18, w * 0.12, h * 0.16, this.colors.shirt, this.colors.skin);
+    this.drawLimb(ctx, s, w * 0.28, -h * 0.38, this.joints.rightUpperArm, this.joints.rightLowerArm, w * 0.14, h * 0.18, w * 0.12, h * 0.16, this.colors.shirt, this.colors.skin);
+  }
+
+  drawLegs(ctx, s) {
+    const w = CONFIG.avatarBaseWidth * s, h = CONFIG.avatarBaseHeight * s;
+    this.drawLimb(ctx, s, -w * 0.12, -h * 0.1, this.joints.leftUpperLeg, this.joints.leftLowerLeg, w * 0.16, h * 0.2, w * 0.14, h * 0.18, this.colors.pants, this.colors.pants);
+    this.drawLimb(ctx, s, w * 0.12, -h * 0.1, this.joints.rightUpperLeg, this.joints.rightLowerLeg, w * 0.16, h * 0.2, w * 0.14, h * 0.18, this.colors.pants, this.colors.pants);
+    this.drawShoe(ctx, s, -w * 0.12, h * 0.08 + this.joints.leftLowerLeg * h * 0.15);
+    this.drawShoe(ctx, s, w * 0.12, h * 0.08 + this.joints.rightLowerLeg * h * 0.15);
+  }
+
+  drawLimb(ctx, s, ox, oy, upperAngle, lowerAngle, upperW, upperH, lowerW, lowerH, upperColor, lowerColor) {
+    ctx.save();
+    ctx.translate(ox, oy); ctx.rotate(upperAngle);
+    ctx.fillStyle = upperColor;
+    ctx.beginPath(); ctx.roundRect(-upperW / 2, 0, upperW, upperH, 3 * s); ctx.fill();
+    ctx.strokeStyle = this.darkenColor(upperColor, 0.2); ctx.lineWidth = 1 * s; ctx.stroke();
+    ctx.translate(0, upperH); ctx.rotate(lowerAngle);
+    ctx.fillStyle = lowerColor;
+    ctx.beginPath(); ctx.roundRect(-lowerW / 2, 0, lowerW, lowerH, 3 * s); ctx.fill();
+    ctx.strokeStyle = this.darkenColor(lowerColor, 0.2); ctx.lineWidth = 1 * s; ctx.stroke();
+    ctx.restore();
+  }
+
+  drawShoe(ctx, s, x, y) {
+    ctx.fillStyle = '#212121';
+    ctx.beginPath(); ctx.ellipse(x, y + 5 * s, 7 * s, 4 * s, 0, 0, Math.PI * 2); ctx.fill();
+  }
+
+  drawProp(ctx, s) {
+    const w = CONFIG.avatarBaseWidth * s, h = CONFIG.avatarBaseHeight * s;
+    const handX = -w * 0.28, handY = -h * 0.38 + h * 0.34;
+    ctx.save(); ctx.translate(handX, handY);
+    switch (this.propType) {
+      case 'drink':
+        ctx.fillStyle = 'rgba(200,230,255,0.6)';
+        ctx.beginPath(); ctx.moveTo(-6*s,-15*s); ctx.lineTo(-5*s,0); ctx.lineTo(5*s,0); ctx.lineTo(6*s,-15*s); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#88CCFF'; ctx.lineWidth = 1*s; ctx.stroke();
+        ctx.fillStyle = 'rgba(255,100,50,0.5)';
+        ctx.beginPath(); ctx.moveTo(-5*s,-8*s); ctx.lineTo(-4*s,0); ctx.lineTo(4*s,0); ctx.lineTo(5*s,-8*s); ctx.closePath(); ctx.fill();
+        break;
+      case 'eat':
+        ctx.fillStyle = '#D4A03C';
+        ctx.beginPath(); ctx.ellipse(0,-5*s,10*s,5*s,0,Math.PI,0); ctx.fill();
+        ctx.fillStyle = '#5D3A1A'; ctx.fillRect(-9*s,-5*s,18*s,5*s);
+        ctx.fillStyle = '#4CAF50'; ctx.fillRect(-10*s,-2*s,20*s,2*s);
+        ctx.fillStyle = '#D4A03C'; ctx.fillRect(-9*s,0,18*s,3*s);
+        break;
+      case 'cheer':
+        ctx.fillStyle = 'rgba(255,230,200,0.6)';
+        ctx.beginPath(); ctx.ellipse(0,-12*s,8*s,4*s,0,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#DDCCBB'; ctx.lineWidth = 1.5*s; ctx.stroke();
+        ctx.strokeStyle = '#BBB'; ctx.lineWidth = 2*s;
+        ctx.beginPath(); ctx.moveTo(0,-8*s); ctx.lineTo(0,2*s); ctx.stroke();
+        ctx.beginPath(); ctx.ellipse(0,3*s,6*s,2*s,0,0,Math.PI*2); ctx.stroke();
+        break;
+    }
+    ctx.restore();
+  }
+
+  drawUsername(ctx, x, y, s) {
+    ctx.save();
+    ctx.globalAlpha = this.opacity * 0.85;
+    const fontSize = Math.round(11 * s);
+    ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFF'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3 * s;
+    ctx.strokeText(this.username, x, y);
+    ctx.fillText(this.username, x, y);
+    ctx.restore();
+  }
+
+  darkenColor(hex, amount) {
+    if (!hex || !hex.startsWith('#')) return hex;
+    try {
+      const r = Math.max(0, parseInt(hex.slice(1, 3), 16) * (1 - amount));
+      const g = Math.max(0, parseInt(hex.slice(3, 5), 16) * (1 - amount));
+      const b = Math.max(0, parseInt(hex.slice(5, 7), 16) * (1 - amount));
+      return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+    } catch (e) { return hex; }
+  }
+}
+
+// ── Particle System ───────────────────────────────────────────────────────
+class Particle {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.vx = (Math.random() - 0.5) * 200;
+    this.vy = -Math.random() * 200 - 50;
+    this.gravity = 300; this.life = 1.0;
+    this.decay = 0.3 + Math.random() * 0.4;
+    this.size = 3 + Math.random() * 4;
+    this.rotation = Math.random() * Math.PI * 2;
+    this.rotSpeed = (Math.random() - 0.5) * 10;
+    const colors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#FFEB3B'];
+    this.color = colors[Math.floor(Math.random() * colors.length)];
+  }
+  update(dt) {
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    this.vy += this.gravity * dt;
+    this.rotation += this.rotSpeed * dt;
+    this.life -= this.decay * dt;
+    return this.life > 0;
+  }
+  draw(ctx) {
+    ctx.save(); ctx.globalAlpha = this.life;
+    ctx.translate(this.x, this.y); ctx.rotate(this.rotation);
+    ctx.fillStyle = this.color;
+    ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size * 0.6);
+    ctx.restore();
+  }
+}
+
+function spawnConfetti(px, py, count) {
+  for (let i = 0; i < count; i++) particles.push(new Particle(px, py));
+}
+
+// ── Main Render Loop ───────────────────────────────────────────────────────
+let lastTime = performance.now();
+
+function gameLoop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Beat tracking - use real beat data when available
+  const beatInterval = 60 / currentBPM;
+  const timeSinceLastBeat = (now - lastRealBeatTime) / 1000;
+  let isBeatActive = false;
+
+  if (realBeatActive && lastRealBeatTime > 0) {
+    // Real beat from audio source
+    isBeatActive = timeSinceLastBeat < 0.12;
+    beatPhase = timeSinceLastBeat / beatInterval;
+    if (timeSinceLastBeat > beatInterval * 2) realBeatActive = false;
+  } else {
+    // Fallback: simulated beat
+    const timeSinceBeat = (now / 1000) % beatInterval;
+    beatPhase = timeSinceBeat / beatInterval;
+    isBeatActive = timeSinceBeat < 0.1;
+  }
+  const beatInfo = { active: isBeatActive, bpm: currentBPM, phase: beatPhase };
+
+  const sortedAvatars = [...avatars.values()].sort((a, b) => a.y - b.y);
+  const toRemove = [];
+  for (const avatar of sortedAvatars) {
+    if (avatar.update(dt, beatInfo)) toRemove.push(avatar.username);
+    else avatar.draw(ctx);
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    if (!particles[i].update(dt)) particles.splice(i, 1);
+    else particles[i].draw(ctx);
+  }
+
+  for (const name of toRemove) avatars.delete(name);
+
+  const now2 = Date.now();
+  for (const [name, avatar] of avatars) {
+    if (now2 - avatar.lastActivity > CONFIG.inactivityTimeout && !avatar.fadeOut) avatar.fadeOut = true;
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ── Socket.IO Connection ──────────────────────────────────────────────────
+let socket = null;
+
+function connectSocketIO() {
+  try {
+    if (typeof io === 'undefined') {
+      showError('Socket.IO not loaded - CDN may be blocked. Retrying...');
+      setTimeout(connectSocketIO, 5000);
+      return;
+    }
+
+    // Connect to the same server that serves this page
+    socket = io.connect('/', {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 3000
+    });
+
+    socket.on('connect', () => {
+      console.log('[Overlay] Socket.IO connected');
+      socket.emit('identify', { clientType: 'overlay' });
+      document.getElementById('error-overlay').style.display = 'none';
+    });
+
+    socket.on('init', (data) => {
+      console.log('[Overlay] Init received');
+      if (data.bpm) currentBPM = data.bpm;
+      if (data.avatars && data.avatars.length > 0) {
+        for (const avData of data.avatars) {
+          if (!avatars.has(avData.username)) addAvatar(avData.username);
+        }
+      }
+      if (data.config && data.config.scene) {
+        applyConfig(data.config.scene);
+      }
+    });
+
+    socket.on('spawnAvatar', (data) => { addAvatar(data.username, data.colors); });
+    socket.on('removeAvatar', (data) => { removeAvatar(data.username); });
+    socket.on('setEmote', (data) => { setAvatarEmote(data.username, data.emote); });
+    socket.on('resetInactivity', (data) => { resetAvatarInactivity(data.username); });
+    socket.on('configUpdate', (data) => {
+      console.log('[Overlay] configUpdate received:', JSON.stringify(data.config));
+      if (data.config) applyConfig(data.config);
+    });
+    socket.on('twitchConnected', (data) => { console.log('[Overlay] Twitch connected:', data.channel); });
+    socket.on('beat', (data) => {
+      currentBPM = data.bpm || currentBPM;
+      lastRealBeatTime = performance.now();
+      realBeatActive = true;
+    });
+    socket.on('bpmUpdate', (data) => { currentBPM = data.bpm; });
+    socket.on('audioBeat', (data) => {
+      if (data.bpm) currentBPM = data.bpm;
+      lastRealBeatTime = performance.now();
+      realBeatActive = true;
+    });
+    socket.on('partyMode', (data) => { handlePartyMode(data.mode, data.emote); });
+    socket.on('spawnConfetti', (data) => { spawnConfetti(data.x || canvas.width / 2, data.y || canvas.height / 2, data.count || 30); });
+    socket.on('updateColor', (data) => { updateAvatarColor(data.username, data.part, data.color); });
+
+    socket.on('disconnect', () => {
+      console.log('[Overlay] Socket.IO disconnected');
+    });
+
+    socket.on('connect_error', (err) => {
+      console.error('[Overlay] Socket.IO error:', err.message);
+      showError('Verbindung zum Server verloren. Verbinde erneut...');
+    });
+
+  } catch (e) {
+    console.error('[Overlay] Socket.IO init failed:', e);
+    showError('Socket.IO Fehler: ' + e.message);
+    setTimeout(connectSocketIO, 5000);
+  }
+}
+
+// ── Avatar Management Functions ────────────────────────────────────────────
+function addAvatar(username, customColors) {
+  if (avatars.has(username)) { resetAvatarInactivity(username); return false; }
+  if (avatars.size >= CONFIG.maxAvatars) {
+    let oldest = null;
+    for (const [name, av] of avatars) { if (!oldest || av.lastActivity < oldest.lastActivity) oldest = { name, avatar: av }; }
+    if (oldest) oldest.avatar.fadeOut = true;
+  }
+  avatars.set(username, new Avatar(username, canvas.width, canvas.height, customColors));
+  return true;
+}
+
+function removeAvatar(username) {
+  const avatar = avatars.get(username);
+  if (avatar) { avatar.fadeOut = true; return true; }
+  return false;
+}
+
+function setAvatarEmote(username, emoteName) {
+  const avatar = avatars.get(username);
+  if (avatar) {
+    if (emoteName === 'confetti') {
+      const pos = avatar.getPixelPosition();
+      spawnConfetti(pos.x, pos.y - 30, 25);
+    }
+    return avatar.setEmote(emoteName);
+  }
+  return false;
+}
+
+function resetAvatarInactivity(username) {
+  const avatar = avatars.get(username);
+  if (avatar) {
+    avatar.lastActivity = Date.now();
+    if (avatar.fadeOut) { avatar.fadeOut = false; avatar.fadeIn = true; avatar.opacity = 0; }
+  }
+}
+
+function updateAvatarColor(username, part, color) {
+  const avatar = avatars.get(username);
+  if (avatar && avatar.colors) {
+    if (part === 'skin') avatar.colors.skin = color;
+    else if (part === 'shirt') avatar.colors.shirt = color;
+    else if (part === 'pants') avatar.colors.pants = color;
+    else if (part === 'hair') avatar.colors.hair = color;
+  }
+}
+
+function handlePartyMode(mode, emote) {
+  switch (mode) {
+    case 'party':
+      for (const avatar of avatars.values()) {
+        const dances = Object.keys(ANIMATIONS).filter(k => ANIMATIONS[k].category !== 'social');
+        if (dances.length > 0) avatar.setEmote(dances[Math.floor(Math.random() * dances.length)]);
+      }
+      break;
+    case 'freeze':
+      for (const avatar of avatars.values()) avatar.clearEmote();
+      break;
+    case 'confetti':
+      for (let i = 0; i < 5; i++) spawnConfetti(randRange(canvas.width * 0.1, canvas.width * 0.9), randRange(canvas.height * 0.1, canvas.height * 0.3), 20);
+      break;
+    case 'forceEmote':
+      if (emote) for (const avatar of avatars.values()) avatar.setEmote(emote);
+      break;
+  }
+}
+
+// Report avatar list back to server
+setInterval(() => {
+  if (socket && socket.connected) {
+    const avatarList = [...avatars.values()].map(a => ({
+      username: a.username, currentEmote: a.currentEmote, lastActivity: a.lastActivity, x: a.x, y: a.y
+    }));
+    socket.emit('avatar-update', { avatars: avatarList, count: avatars.size });
+  }
+}, 2000);
+
+// ── Embedded Fallback Animations ──────────────────────────────────────────
+const FALLBACK_ANIMATIONS = {
+  idle: { name: 'Idle', category: 'idle', loop: true, fps: 12,
+    frames: [
+      { head: 0.03, torso: 0.02, leftUpperArm: 0.3, leftLowerArm: 0, rightUpperArm: -0.3, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: -0.03, torso: -0.02, leftUpperArm: 0.25, leftLowerArm: 0, rightUpperArm: -0.25, rightLowerArm: 0, leftUpperLeg: 0.05, leftLowerLeg: 0, rightUpperLeg: -0.05, rightLowerLeg: 0 }
+    ]
+  },
+  disco: { name: 'Disco', category: 'classic', loop: true, fps: 12,
+    frames: [
+      { head: 0.15, torso: 0.2, leftUpperArm: 0.4, leftLowerArm: -0.6, rightUpperArm: -2.8, rightLowerArm: -0.3, leftUpperLeg: 0.15, leftLowerLeg: 0.1, rightUpperLeg: -0.2, rightLowerLeg: 0.15 },
+      { head: -0.15, torso: -0.2, leftUpperArm: 2.8, leftLowerArm: 0.3, rightUpperArm: -0.2, rightLowerArm: 0.6, leftUpperLeg: -0.2, leftLowerLeg: 0.15, rightUpperLeg: 0.15, rightLowerLeg: 0.1 }
+    ]
+  },
+  funky: { name: 'Funky', category: 'classic', loop: true, fps: 12,
+    frames: [
+      { head: 0.24, torso: 0.29, leftUpperArm: 1.14, leftLowerArm: 0.59, rightUpperArm: -1.14, rightLowerArm: -0.59, leftUpperLeg: 0.48, leftLowerLeg: 0.38, rightUpperLeg: -0.48, rightLowerLeg: 0 },
+      { head: -0.24, torso: -0.29, leftUpperArm: -1.14, leftLowerArm: -0.41, rightUpperArm: 1.14, rightLowerArm: 0.41, leftUpperLeg: -0.48, leftLowerLeg: 0, rightUpperLeg: 0.48, rightLowerLeg: 0.38 }
+    ]
+  },
+  robot: { name: 'Robot', category: 'classic', loop: true, fps: 8,
+    frames: [
+      { head: 0.0, torso: 0.0, leftUpperArm: 0.0, leftLowerArm: 0.0, rightUpperArm: 1.33, rightLowerArm: 0.67, leftUpperLeg: 0.0, leftLowerLeg: 0, rightUpperLeg: 0.67, rightLowerLeg: 0.67 },
+      { head: 0.33, torso: 0.33, leftUpperArm: 1.33, leftLowerArm: 0.67, rightUpperArm: 0.67, rightLowerArm: -0.33, leftUpperLeg: 0.67, leftLowerLeg: 0.33, rightUpperLeg: 0.33, rightLowerLeg: 0.33 },
+      { head: -0.33, torso: -0.33, leftUpperArm: -1.33, leftLowerArm: 0.67, rightUpperArm: -0.67, rightLowerArm: -0.33, leftUpperLeg: -0.67, leftLowerLeg: 0, rightUpperLeg: -0.33, rightLowerLeg: 0 },
+      { head: -0.33, torso: -0.33, leftUpperArm: -1.33, leftLowerArm: -0.67, rightUpperArm: 0.67, rightLowerArm: -0.33, leftUpperLeg: -0.67, leftLowerLeg: 0, rightUpperLeg: 0.33, rightLowerLeg: 0.33 }
+    ]
+  },
+  twist: { name: 'Twist', category: 'classic', loop: true, fps: 12,
+    frames: [
+      { head: 0.0, torso: 0.0, leftUpperArm: 1.0, leftLowerArm: 0.4, rightUpperArm: -1.0, rightLowerArm: -0.4, leftUpperLeg: 0.0, leftLowerLeg: 0, rightUpperLeg: 0.0, rightLowerLeg: 0.0 },
+      { head: 0.26, torso: 0.37, leftUpperArm: 0.67, leftLowerArm: 0.27, rightUpperArm: -0.67, rightLowerArm: -0.27, leftUpperLeg: 0.3, leftLowerLeg: 0.3, rightUpperLeg: -0.3, rightLowerLeg: 0 },
+      { head: -0.26, torso: -0.37, leftUpperArm: -0.67, leftLowerArm: -0.27, rightUpperArm: 0.67, rightLowerArm: 0.27, leftUpperLeg: -0.3, leftLowerLeg: 0, rightUpperLeg: 0.3, rightLowerLeg: 0.3 }
+    ]
+  },
+  winken: { name: 'Winken', category: 'social', loop: true, fps: 10,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.8, leftLowerArm: -0.5, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.5, leftLowerArm: -0.9, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  lachen: { name: 'Lachen', category: 'social', loop: false, fps: 10,
+    frames: [
+      { head: 0.15, torso: 0.1, leftUpperArm: 0.4, leftLowerArm: -0.8, rightUpperArm: -0.4, rightLowerArm: 0.8, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: -0.1, torso: -0.05, leftUpperArm: 0.5, leftLowerArm: -0.6, rightUpperArm: -0.5, rightLowerArm: 0.6, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  jump: { name: 'Jump', category: 'party', loop: true, fps: 8,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.2, leftLowerArm: -0.3, rightUpperArm: 2.2, rightLowerArm: 0.3, leftUpperLeg: -0.6, leftLowerLeg: 0.8, rightUpperLeg: -0.6, rightLowerLeg: 0.8 },
+      { head: -0.05, torso: -0.02, leftUpperArm: -0.3, leftLowerArm: 0, rightUpperArm: 0.3, rightLowerArm: 0, leftUpperLeg: 0.2, leftLowerLeg: 0, rightUpperLeg: 0.2, rightLowerLeg: 0 }
+    ]
+  },
+  bounce: { name: 'Bounce', category: 'party', loop: true, fps: 10,
+    frames: [
+      { head: 0.1, torso: 0.12, leftUpperArm: -1.5, leftLowerArm: -0.5, rightUpperArm: 1.5, rightLowerArm: 0.5, leftUpperLeg: 0.3, leftLowerLeg: 0.3, rightUpperLeg: -0.3, rightLowerLeg: 0.3 },
+      { head: -0.08, torso: -0.1, leftUpperArm: -0.8, leftLowerArm: -0.3, rightUpperArm: 0.8, rightLowerArm: 0.3, leftUpperLeg: -0.3, leftLowerLeg: 0.2, rightUpperLeg: 0.3, rightLowerLeg: 0.2 }
+    ]
+  },
+  shuffle: { name: 'Shuffle', category: 'party', loop: true, fps: 12,
+    frames: [
+      { head: 0.05, torso: 0.08, leftUpperArm: -0.6, leftLowerArm: -0.4, rightUpperArm: 0.6, rightLowerArm: 0.4, leftUpperLeg: 0.3, leftLowerLeg: 0.2, rightUpperLeg: -0.2, rightLowerLeg: 0.1 },
+      { head: -0.05, torso: -0.08, leftUpperArm: 0.6, leftLowerArm: 0.4, rightUpperArm: -0.6, rightLowerArm: -0.4, leftUpperLeg: -0.2, leftLowerLeg: 0.1, rightUpperLeg: 0.3, rightLowerLeg: 0.2 }
+    ]
+  },
+  runningman: { name: 'Running Man', category: 'party', loop: true, fps: 10,
+    frames: [
+      { head: 0.1, torso: 0.15, leftUpperArm: -1.2, leftLowerArm: -0.8, rightUpperArm: 1.2, rightLowerArm: 0.8, leftUpperLeg: 0.6, leftLowerLeg: 0.5, rightUpperLeg: -0.8, rightLowerLeg: 0.6 },
+      { head: -0.1, torso: -0.15, leftUpperArm: 1.2, leftLowerArm: 0.8, rightUpperArm: -1.2, rightLowerArm: -0.8, leftUpperLeg: -0.8, leftLowerLeg: 0.6, rightUpperLeg: 0.6, rightLowerLeg: 0.5 }
+    ]
+  },
+  vibe: { name: 'Vibe', category: 'party', loop: true, fps: 10,
+    frames: [
+      { head: 0.12, torso: 0.08, leftUpperArm: -1.8, leftLowerArm: -0.6, rightUpperArm: -0.5, rightLowerArm: 0.4, leftUpperLeg: 0.15, leftLowerLeg: 0.1, rightUpperLeg: -0.15, rightLowerLeg: 0.1 },
+      { head: -0.08, torso: -0.06, leftUpperArm: -0.5, leftLowerArm: 0.4, rightUpperArm: -1.8, rightLowerArm: -0.6, leftUpperLeg: -0.15, leftLowerLeg: 0.1, rightUpperLeg: 0.15, rightLowerLeg: 0.1 }
+    ]
+  },
+  groove: { name: 'Groove', category: 'party', loop: true, fps: 10,
+    frames: [
+      { head: 0.15, torso: 0.2, leftUpperArm: -1.0, leftLowerArm: -0.5, rightUpperArm: 1.0, rightLowerArm: 0.5, leftUpperLeg: 0.25, leftLowerLeg: 0.2, rightUpperLeg: -0.25, rightLowerLeg: 0.15 },
+      { head: -0.15, torso: -0.2, leftUpperArm: 1.0, leftLowerArm: 0.5, rightUpperArm: -1.0, rightLowerArm: -0.5, leftUpperLeg: -0.25, leftLowerLeg: 0.15, rightUpperLeg: 0.25, rightLowerLeg: 0.2 }
+    ]
+  },
+  spin: { name: 'Spin', category: 'party', loop: true, fps: 8,
+    frames: [
+      { head: 0.4, torso: 0.5, leftUpperArm: -2.5, leftLowerArm: -0.3, rightUpperArm: 2.5, rightLowerArm: 0.3, leftUpperLeg: 0.2, leftLowerLeg: 0.15, rightUpperLeg: -0.2, rightLowerLeg: 0.15 },
+      { head: 0.0, torso: 0.0, leftUpperArm: -0.5, leftLowerArm: 0, rightUpperArm: 0.5, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: -0.4, torso: -0.5, leftUpperArm: 2.5, leftLowerArm: 0.3, rightUpperArm: -2.5, rightLowerArm: -0.3, leftUpperLeg: -0.2, leftLowerLeg: 0.15, rightUpperLeg: 0.2, rightLowerLeg: 0.15 }
+    ]
+  },
+  wave_emote: { name: 'Wave', category: 'party', loop: true, fps: 10,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.8, leftLowerArm: -0.5, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.5, leftLowerArm: -0.9, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  dab: { name: 'Dab', category: 'hiphop', loop: false, fps: 8,
+    frames: [
+      { head: -0.5, torso: -0.3, leftUpperArm: -2.8, leftLowerArm: -0.2, rightUpperArm: 1.5, rightLowerArm: 0.5, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 },
+      { head: 0.0, torso: 0.0, leftUpperArm: 0.3, leftLowerArm: 0, rightUpperArm: -0.3, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  floss: { name: 'Floss', category: 'hiphop', loop: true, fps: 12,
+    frames: [
+      { head: 0.2, torso: 0.3, leftUpperArm: -2.0, leftLowerArm: 0.5, rightUpperArm: 2.0, rightLowerArm: -0.5, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 },
+      { head: -0.2, torso: -0.3, leftUpperArm: 2.0, leftLowerArm: -0.5, rightUpperArm: -2.0, rightLowerArm: 0.5, leftUpperLeg: -0.1, leftLowerLeg: 0, rightUpperLeg: 0.1, rightLowerLeg: 0 }
+    ]
+  },
+  headbang: { name: 'Headbang', category: 'epic', loop: true, fps: 12,
+    frames: [
+      { head: 0.5, torso: 0.15, leftUpperArm: -1.5, leftLowerArm: -0.3, rightUpperArm: 1.5, rightLowerArm: 0.3, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 },
+      { head: -0.5, torso: -0.15, leftUpperArm: -1.0, leftLowerArm: -0.5, rightUpperArm: 1.0, rightLowerArm: 0.5, leftUpperLeg: -0.1, leftLowerLeg: 0, rightUpperLeg: 0.1, rightLowerLeg: 0 }
+    ]
+  },
+  airguitar: { name: 'Air Guitar', category: 'epic', loop: true, fps: 12,
+    frames: [
+      { head: 0.2, torso: 0.1, leftUpperArm: -1.8, leftLowerArm: -0.8, rightUpperArm: 2.5, rightLowerArm: -1.0, leftUpperLeg: 0.2, leftLowerLeg: 0.15, rightUpperLeg: -0.15, rightLowerLeg: 0.1 },
+      { head: -0.1, torso: -0.05, leftUpperArm: -1.5, leftLowerArm: -1.0, rightUpperArm: 2.0, rightLowerArm: -0.5, leftUpperLeg: 0.1, leftLowerLeg: 0.1, rightUpperLeg: -0.2, rightLowerLeg: 0.15 }
+    ]
+  },
+  rave: { name: 'Rave', category: 'epic', loop: true, fps: 14,
+    frames: [
+      { head: 0.15, torso: 0.1, leftUpperArm: -2.8, leftLowerArm: -0.5, rightUpperArm: -2.8, rightLowerArm: -0.5, leftUpperLeg: 0.2, leftLowerLeg: 0.15, rightUpperLeg: -0.2, rightLowerLeg: 0.15 },
+      { head: -0.1, torso: -0.08, leftUpperArm: 2.8, leftLowerArm: 0.5, rightUpperArm: 2.8, rightLowerArm: 0.5, leftUpperLeg: -0.2, leftLowerLeg: 0.15, rightUpperLeg: 0.2, rightLowerLeg: 0.15 }
+    ]
+  },
+  poplock: { name: 'Pop Lock', category: 'epic', loop: true, fps: 10,
+    frames: [
+      { head: 0.2, torso: 0.25, leftUpperArm: -1.8, leftLowerArm: -0.3, rightUpperArm: 0.5, rightLowerArm: 0.8, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 },
+      { head: -0.15, torso: -0.2, leftUpperArm: 0.5, leftLowerArm: 0.8, rightUpperArm: -1.8, rightLowerArm: -0.3, leftUpperLeg: -0.1, leftLowerLeg: 0, rightUpperLeg: 0.1, rightLowerLeg: 0 }
+    ]
+  },
+  sway: { name: 'Sway', category: 'epic', loop: true, fps: 8,
+    frames: [
+      { head: 0.15, torso: 0.12, leftUpperArm: -0.5, leftLowerArm: -0.3, rightUpperArm: 0.5, rightLowerArm: 0.3, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 },
+      { head: -0.15, torso: -0.12, leftUpperArm: -0.3, leftLowerArm: -0.5, rightUpperArm: 0.3, rightLowerArm: 0.5, leftUpperLeg: -0.1, leftLowerLeg: 0, rightUpperLeg: 0.1, rightLowerLeg: 0 }
+    ]
+  },
+  beatbounce: { name: 'Beat Bounce', category: 'beatsync', loop: true, fps: 10,
+    frames: [
+      { head: 0.1, torso: 0.08, leftUpperArm: -1.5, leftLowerArm: -0.5, rightUpperArm: 1.5, rightLowerArm: 0.5, leftUpperLeg: 0.4, leftLowerLeg: 0.4, rightUpperLeg: -0.4, rightLowerLeg: 0.4 },
+      { head: -0.05, torso: -0.04, leftUpperArm: -0.5, leftLowerArm: -0.2, rightUpperArm: 0.5, rightLowerArm: 0.2, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  bassdrop: { name: 'Bass Drop', category: 'beatsync', loop: true, fps: 8,
+    frames: [
+      { head: 0.3, torso: 0.2, leftUpperArm: -2.5, leftLowerArm: -0.3, rightUpperArm: 2.5, rightLowerArm: 0.3, leftUpperLeg: 0.5, leftLowerLeg: 0.6, rightUpperLeg: 0.5, rightLowerLeg: 0.6 },
+      { head: -0.2, torso: -0.15, leftUpperArm: -0.3, leftLowerArm: 0, rightUpperArm: 0.3, rightLowerArm: 0, leftUpperLeg: -0.3, leftLowerLeg: 0, rightUpperLeg: -0.3, rightLowerLeg: 0 }
+    ]
+  },
+  peace: { name: 'Peace', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.5, leftLowerArm: -0.5, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  thumbsup: { name: 'Thumbs Up', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.5, leftLowerArm: 0, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  cry: { name: 'Cry', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: -0.2, torso: -0.1, leftUpperArm: 0.8, leftLowerArm: 0.5, rightUpperArm: -0.8, rightLowerArm: -0.5, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  angry: { name: 'Angry', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: 0.1, torso: 0.15, leftUpperArm: -1.5, leftLowerArm: -0.8, rightUpperArm: 1.5, rightLowerArm: 0.8, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 }
+    ]
+  },
+  surprise: { name: 'Surprise', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: 0.0, torso: 0.0, leftUpperArm: -2.5, leftLowerArm: -0.5, rightUpperArm: 2.5, rightLowerArm: 0.5, leftUpperLeg: 0.1, leftLowerLeg: 0, rightUpperLeg: -0.1, rightLowerLeg: 0 }
+    ]
+  },
+  heart: { name: 'Heart', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: 0.05, torso: 0.03, leftUpperArm: -2.0, leftLowerArm: -0.8, rightUpperArm: 2.0, rightLowerArm: 0.8, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  drink: { name: 'Drink', category: 'social', loop: true, fps: 8,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.0, leftLowerArm: -0.8, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: -0.05, torso: -0.02, leftUpperArm: -1.5, leftLowerArm: -1.2, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  eat: { name: 'Eat', category: 'social', loop: true, fps: 8,
+    frames: [
+      { head: 0.05, torso: 0.03, leftUpperArm: -1.8, leftLowerArm: -1.0, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 },
+      { head: -0.05, torso: -0.02, leftUpperArm: -1.2, leftLowerArm: -0.5, rightUpperArm: 0.2, rightLowerArm: 0, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  },
+  cheer: { name: 'Cheer', category: 'social', loop: false, fps: 8,
+    frames: [
+      { head: 0.1, torso: 0.05, leftUpperArm: -2.8, leftLowerArm: -0.3, rightUpperArm: 2.8, rightLowerArm: 0.3, leftUpperLeg: 0, leftLowerLeg: 0, rightUpperLeg: 0, rightLowerLeg: 0 }
+    ]
+  }
+};
+
+// ── Load Animations & Start ────────────────────────────────────────────────
+async function init() {
+  // Try to load animations from server API
+  try {
+    const response = await fetch('/api/animations');
+    const result = await response.json();
+    if (result.success && result.data) {
+      ANIMATIONS = result.data;
+      console.log(`[Overlay] Loaded ${Object.keys(ANIMATIONS).length} animations from server`);
+    } else {
+      console.warn('[Overlay] Server animations failed, using fallback');
+      ANIMATIONS = FALLBACK_ANIMATIONS;
+    }
+  } catch (e) {
+    console.warn('[Overlay] Fetch failed, using fallback:', e.message);
+    ANIMATIONS = FALLBACK_ANIMATIONS;
+  }
+
+  console.log(`[Overlay] ${Object.keys(ANIMATIONS).length} animations available`);
+
+  // Start render loop
+  requestAnimationFrame(gameLoop);
+
+  // Connect Socket.IO
+  connectSocketIO();
+
+  console.log('[Overlay] Initialized - transparent canvas, avatars only');
+}
+
+init();
+  </script>
+</body>
+</html>

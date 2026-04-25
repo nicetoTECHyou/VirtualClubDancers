@@ -1,0 +1,68 @@
+{
+  "name": "virtual-club-dancers",
+  "version": "2.2.0",
+  "description": "Virtual Club Dancers - Twitch Chat controlled OBS overlay with South-Park style animated avatars",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis"
+  },
+  "author": "nicetoTECHyou",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.4",
+    "tmi.js": "^1.8.5"
+  },
+  "build": {
+    "appId": "com.nicetotechyou.virtualclubdancers",
+    "productName": "VirtualClubDancers",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "sign": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "VirtualClubDancers-${version}-Portable.exe"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "assets/**/*",
+      "data/**/*",
+      "!dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "data",
+        "to": "data"
+      }
+    ]
+  }
+}
