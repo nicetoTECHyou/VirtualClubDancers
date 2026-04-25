@@ -1,13 +1,12 @@
 {
   "name": "virtual-club-dancers",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Virtual Club Dancers - Twitch Chat controlled OBS overlay with South-Park style animated avatars",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "electron-builder --win",
-    "build:portable": "electron-builder --win portable",
+    "build": "electron-builder --win portable",
     "build:installer": "electron-builder --win nsis"
   },
   "author": "nicetoTECHyou",
@@ -33,20 +32,10 @@
         {
           "target": "portable",
           "arch": ["x64"]
-        },
-        {
-          "target": "nsis",
-          "arch": ["x64"]
         }
       ],
       "icon": "assets/icon.ico",
-      "sign": false
-    },
-    "nsis": {
-      "oneClick": true,
-      "allowToChangeInstallationDirectory": false,
-      "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico"
+      "signAndEditExecutable": false
     },
     "portable": {
       "artifactName": "VirtualClubDancers-${version}-Portable.exe"
